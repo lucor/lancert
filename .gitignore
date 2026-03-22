@@ -1,0 +1,6 @@
+/lancert
+/healthcheck
+/main
+data/
+certs/
+.env

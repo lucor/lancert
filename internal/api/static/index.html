@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>lancert.dev — TLS certificates for private IPs</title>
+  <meta name="description" content="Real Let's Encrypt wildcard TLS certificates for private RFC 1918 IPs. One curl, valid HTTPS on your LAN.">
+  <script defer src="https://analytics.lucor.dev/script.js" data-website-id="1c9b0509-2f00-493b-bb0a-da02ffb6ff1d"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #fff;
+      --fg: #111;
+      --muted: #666;
+      --border: #e0e0e0;
+      --accent: #1a73e8;
+      --code-bg: #f5f5f5;
+      --code-fg: #1a1a1a;
+      --card-bg: #fff;
+      --green: #16a34a;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .container {
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 0 1.5rem;
+    }
+
+    /* Header */
+    header {
+      padding: 3rem 0 2rem;
+      text-align: center;
+    }
+
+    header h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    header h1 span {
+      color: var(--accent);
+    }
+
+    header p {
+      margin-top: 0.75rem;
+      color: var(--muted);
+      font-size: 1.1rem;
+      max-width: 480px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    /* Quick start */
+    .quickstart {
+      margin: 2.5rem 0;
+    }
+
+    .quickstart h2 {
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-bottom: 1rem;
+    }
+
+    .step {
+      margin-bottom: 1.5rem;
+    }
+
+    .step-label {
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-bottom: 0.4rem;
+    }
+
+    .step-label strong {
+      color: var(--fg);
+    }
+
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.85rem 1rem;
+      overflow-x: auto;
+      font-size: 0.85rem;
+      line-height: 1.5;
+    }
+
+    code {
+      font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, Consolas, monospace;
+      color: var(--code-fg);
+    }
+
+    .comment { color: #6a737d; }
+
+    /* Sections */
+    section {
+      margin: 2.5rem 0;
+    }
+
+    section h2 {
+      font-size: 1.15rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+    }
+
+    section p {
+      color: var(--muted);
+      margin-bottom: 0.5rem;
+    }
+
+    /* How it works */
+    .how-list {
+      list-style: none;
+      counter-reset: how;
+    }
+
+    .how-list li {
+      counter-increment: how;
+      padding: 0.75rem 0;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .how-list li:last-child {
+      border-bottom: none;
+    }
+
+    .how-list li::before {
+      content: counter(how);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.5rem;
+      height: 1.5rem;
+      background: var(--code-bg);
+      border-radius: 50%;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--fg);
+      margin-right: 0.75rem;
+      vertical-align: middle;
+    }
+
+    .how-list code {
+      font-size: 0.8rem;
+      background: var(--code-bg);
+      padding: 0.1rem 0.35rem;
+      border-radius: 4px;
+    }
+
+    /* Features grid */
+    .features {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 1rem;
+    }
+
+    .feature {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem;
+    }
+
+    .feature h3 {
+      font-size: 0.95rem;
+      font-weight: 600;
+      margin-bottom: 0.35rem;
+    }
+
+    .feature p {
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin: 0;
+    }
+
+    /* Supported ranges */
+    .ranges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-top: 0.5rem;
+    }
+
+    .ranges code {
+      background: var(--code-bg);
+      padding: 0.3rem 0.65rem;
+      border-radius: 6px;
+      font-size: 0.8rem;
+    }
+
+    /* Disclaimer */
+    .disclaimer {
+      margin: 2.5rem 0;
+      padding: 1rem 1.25rem;
+      background: #fffbeb;
+      border: 1px solid #f5e6b8;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      color: #92400e;
+    }
+
+    .disclaimer strong {
+      display: block;
+      margin-bottom: 0.25rem;
+      color: #78350f;
+    }
+
+    /* Footer */
+    footer {
+      padding: 2.5rem 0;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.8rem;
+      border-top: 1px solid var(--border);
+      margin-top: 1rem;
+    }
+
+    footer a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    footer a:hover {
+      text-decoration: underline;
+    }
+
+    /* API reference */
+    .api-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+      margin-top: 0.75rem;
+    }
+
+    .api-table th {
+      text-align: left;
+      font-weight: 600;
+      padding: 0.5rem 0.5rem;
+      border-bottom: 2px solid var(--border);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+    }
+
+    .api-table td {
+      padding: 0.5rem 0.5rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+
+    .api-table code {
+      font-size: 0.8rem;
+      background: var(--code-bg);
+      padding: 0.1rem 0.35rem;
+      border-radius: 4px;
+      white-space: nowrap;
+    }
+
+    .api-table .method {
+      font-weight: 600;
+      font-size: 0.75rem;
+    }
+
+    .api-table .method-post { color: #16a34a; }
+    .api-table .method-get { color: var(--accent); }
+
+    .api-table .status {
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    /* Branch cards */
+    .decision-label {
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin: 0.5rem 0 0.75rem;
+    }
+
+    .branch-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .branch {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      background: var(--card-bg);
+    }
+
+    .branch-title {
+      font-size: 0.8rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+    }
+
+    .branch-ready .branch-title { color: var(--green); }
+    .branch-new .branch-title { color: var(--accent); }
+
+    .branch .step-label { margin-top: 0.75rem; }
+    .branch .step-label:first-of-type { margin-top: 0; }
+    .branch pre { margin-top: 0.35rem; }
+
+    /* Responsive */
+    @media (min-width: 480px) {
+      .features {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      header h1 {
+        font-size: 2.5rem;
+      }
+    }
+
+    @media (min-width: 860px) {
+      .branch-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <header>
+      <h1><span>lancert</span>.dev</h1>
+      <p>Real Let's Encrypt TLS certificates for private IPs. One curl, valid HTTPS on your LAN.</p>
+    </header>
+
+    <div class="quickstart">
+      <h2>Quick start</h2>
+
+      <div class="step">
+        <div class="step-label"><strong>1.</strong> Check if a certificate already exists</div>
+        <pre><code>curl https://lancert.dev/certs/192.168.1.50
+<span class="comment"># 200 → cert ready  |  404 → not issued yet</span></code></pre>
+      </div>
+
+      <div class="decision-label">What happens next?</div>
+
+      <div class="branch-grid">
+        <div class="branch branch-ready">
+          <div class="branch-title">200 — cert already exists</div>
+          <div class="step-label">You're done! Use these names</div>
+          <pre><code>192-168-1-50.lancert.dev
+*.192-168-1-50.lancert.dev</code></pre>
+        </div>
+
+        <div class="branch branch-new">
+          <div class="branch-title">404 — no cert yet</div>
+          <div class="step-label">Request one</div>
+          <pre><code>curl -X POST https://lancert.dev/certs/192.168.1.50
+<span class="comment"># 200 → ready  |  202 → issuance started, poll with GET</span></code></pre>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-label"><strong>2.</strong> Point your service to the subdomain — DNS already resolves to your private IP</div>
+        <pre><code>curl https://192-168-1-50.lancert.dev</code></pre>
+      </div>
+    </div>
+
+    <section>
+      <h2>How it works</h2>
+      <ol class="how-list">
+        <li>lancert.dev runs an authoritative DNS server for the <code>lancert.dev</code> zone</li>
+        <li>Subdomains like <code>192-168-1-50.lancert.dev</code> resolve to <code>192.168.1.50</code> by parsing the IP from the name</li>
+        <li>POST triggers certificate issuance via Let's Encrypt DNS-01 challenge — fully automated and non-blocking</li>
+        <li>Each IP gets a wildcard cert covering <code>*.192-168-1-50.lancert.dev</code></li>
+        <li>Certificates are cached and renewed on next request before expiry</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>Why lancert.dev</h2>
+      <div class="features">
+        <div class="feature">
+          <h3>Real certificates</h3>
+          <p>Trusted by every browser and device. No CA installation, no mkcert, no warnings.</p>
+        </div>
+        <div class="feature">
+          <h3>Works on mobile</h3>
+          <p>Service workers, push notifications, WebRTC — anything that needs a secure context.</p>
+        </div>
+        <div class="feature">
+          <h3>One curl</h3>
+          <p>No signup, no accounts, no config files. Request a cert and start using it.</p>
+        </div>
+        <div class="feature">
+          <h3>Wildcard included</h3>
+          <p>Each cert covers both the base domain and all subdomains under your IP.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Supported IP ranges</h2>
+      <p>Only RFC 1918 private IPv4 addresses are accepted:</p>
+      <div class="ranges">
+        <code>10.0.0.0/8</code>
+        <code>172.16.0.0/12</code>
+        <code>192.168.0.0/16</code>
+      </div>
+    </section>
+
+    <section>
+      <h2>API</h2>
+      <p>Issuance is asynchronous. POST triggers it, GET polls for the result.</p>
+      <table class="api-table">
+        <thead>
+          <tr>
+            <th>Endpoint</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="method method-post">POST</span> <code>/certs/{ip}</code></td>
+            <td>Request a certificate. <span class="status">200 cached&thinsp;|&thinsp;202 started</span></td>
+          </tr>
+          <tr>
+            <td><span class="method method-get">GET</span> <code>/certs/{ip}</code></td>
+            <td>Fetch certificate status. <span class="status">200 ready&thinsp;|&thinsp;202 pending&thinsp;|&thinsp;404 not found</span></td>
+          </tr>
+          <tr>
+            <td><span class="method method-get">GET</span> <code>/certs/{ip}/ttl</code></td>
+            <td>Remaining certificate validity</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <div class="disclaimer">
+      <strong>Development use only</strong>
+      These certificates are meant for local development. There is no ownership concept for private IPs — anyone can request a certificate for any RFC 1918 address. Security relies on LAN isolation. Do not use in production.
+    </div>
+
+    <footer>
+      <p>lancert.dev — by <a href="https://lucor.dev">Luca Corbo</a></p>
+    </footer>
+
+  </div>
+</body>
+</html>
