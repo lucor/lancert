@@ -269,7 +269,7 @@ func (s *Service) issue(ctx context.Context, addr netip.Addr) (*certstore.CertBu
 		AccountKey: s.config.AccountKey,
 		Staging:    s.config.Staging,
 		TXTStore:   s.txtStore,
-		Resolver:   nil, // use system resolver — our DNS is authoritative
+		Resolver:   nil, // system default; follows NS delegation to our authoritative DNS
 	})
 	if err != nil {
 		return nil, fmt.Errorf("issue cert for %s: %w", addr, err)

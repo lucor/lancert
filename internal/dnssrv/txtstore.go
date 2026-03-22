@@ -29,6 +29,7 @@ package dnssrv
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 )
@@ -60,8 +61,13 @@ func NewTXTStore() *TXTStore {
 // SetTXTWithCleanup adds a TXT value for the given FQDN and returns a
 // cleanup function that removes that specific value. Implements TXTHandler.
 func (s *TXTStore) SetTXTWithCleanup(_ context.Context, fqdn, value string, _ time.Duration) (CleanupFunc, error) {
+	// Normalize to lowercase: DNS names are case-insensitive (RFC 4343) and
+	// some resolvers (including LE's validators) use 0x20 randomization,
+	// sending mixed-case queries like _AcMe-ChAlLeNgE.lAnCeRt.dEv.
+	key := strings.ToLower(fqdn)
+
 	s.mu.Lock()
-	s.records[fqdn] = append(s.records[fqdn], value)
+	s.records[key] = append(s.records[key], value)
 	s.mu.Unlock()
 
 	slog.Info("txtstore: added record", "fqdn", fqdn)
@@ -70,16 +76,16 @@ func (s *TXTStore) SetTXTWithCleanup(_ context.Context, fqdn, value string, _ ti
 		s.mu.Lock()
 		defer s.mu.Unlock()
 
-		values := s.records[fqdn]
+		values := s.records[key]
 		for i, v := range values {
 			if v == value {
-				s.records[fqdn] = append(values[:i], values[i+1:]...)
+				s.records[key] = append(values[:i], values[i+1:]...)
 				break
 			}
 		}
 
-		if len(s.records[fqdn]) == 0 {
-			delete(s.records, fqdn)
+		if len(s.records[key]) == 0 {
+			delete(s.records, key)
 		}
 
 		slog.Info("txtstore: removed record", "fqdn", fqdn)

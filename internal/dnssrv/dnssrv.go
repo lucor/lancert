@@ -46,6 +46,13 @@ import (
 	"lucor.dev/lancert/internal/privateip"
 )
 
+// soaMinTTL controls how long recursive resolvers cache negative responses
+// (NXDOMAIN / NODATA) per RFC 2308. Kept very low (5s) because the only
+// dynamic records in this zone are ephemeral ACME challenge TXT records:
+// a high value would cause resolvers to serve stale "no record" answers
+// for TXT records that were set moments ago.
+const soaMinTTL = 5
+
 // Config holds the DNS server configuration.
 type Config struct {
 	// Zone is the authoritative zone with trailing dot, e.g. "lancert.dev."
@@ -202,12 +209,14 @@ func (s *Server) handleA(msg *dns.Msg, q dns.Question) {
 	ipLabel := extractIPLabel(name, s.config.Zone)
 	if ipLabel == "" {
 		msg.Rcode = dns.RcodeNameError
+		msg.Ns = append(msg.Ns, s.soaRR(s.config.Zone))
 		return
 	}
 
 	addr, err := privateip.ParseSubdomain(ipLabel)
 	if err != nil {
 		msg.Rcode = dns.RcodeNameError
+		msg.Ns = append(msg.Ns, s.soaRR(s.config.Zone))
 		return
 	}
 
@@ -215,9 +224,15 @@ func (s *Server) handleA(msg *dns.Msg, q dns.Question) {
 }
 
 // handleTXT serves challenge records from the in-memory store.
+// When no TXT records exist, the SOA is included in the authority section
+// (NODATA response per RFC 2308) so resolvers cache the negative answer
+// for soaMinTTL instead of their own (potentially much longer) default.
 func (s *Server) handleTXT(msg *dns.Msg, q dns.Question) {
-	values := s.txtStore.Lookup(q.Name)
+	// Normalize to lowercase: DNS is case-insensitive (RFC 4343) and LE's
+	// validators use 0x20 randomization, sending mixed-case query names.
+	values := s.txtStore.Lookup(strings.ToLower(q.Name))
 	if len(values) == 0 {
+		msg.Ns = append(msg.Ns, s.soaRR(s.config.Zone))
 		return
 	}
 
@@ -235,13 +250,22 @@ func (s *Server) handleTXT(msg *dns.Msg, q dns.Question) {
 }
 
 // handleSOA appends the SOA record for the zone.
+// SOA TTL matches MINTTL so that buggy proxies that use min(TTL, MINTTL) or
+// just TTL for negative caching still respect the intended short window.
 func (s *Server) handleSOA(msg *dns.Msg, q dns.Question) {
-	msg.Answer = append(msg.Answer, &dns.SOA{
+	msg.Answer = append(msg.Answer, s.soaRR(q.Name))
+}
+
+// soaRR returns the SOA record for the zone. Used both in direct SOA responses
+// and in the authority section of negative responses (NXDOMAIN / NODATA) per
+// RFC 2308, so that resolvers know how long to cache the negative answer.
+func (s *Server) soaRR(name string) *dns.SOA {
+	return &dns.SOA{
 		Hdr: dns.RR_Header{
-			Name:   q.Name,
+			Name:   name,
 			Rrtype: dns.TypeSOA,
 			Class:  dns.ClassINET,
-			Ttl:    3600,
+			Ttl:    soaMinTTL,
 		},
 		Ns:      s.config.SOAMname,
 		Mbox:    s.config.SOARname,
@@ -249,8 +273,8 @@ func (s *Server) handleSOA(msg *dns.Msg, q dns.Question) {
 		Refresh: 3600,
 		Retry:   600,
 		Expire:  86400,
-		Minttl:  60,
-	})
+		Minttl:  soaMinTTL,
+	}
 }
 
 // handleNS appends NS records for the zone.
