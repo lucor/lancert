@@ -1,0 +1,374 @@
+openapi: 3.1.0
+info:
+  title: lancert API
+  description: |
+    Real Let's Encrypt wildcard TLS certificates for private RFC 1918 IPs,
+    designed for local development.
+
+    Certificates cover both `{ip}.lancert.dev` and `*.{ip}.lancert.dev`
+    (with dots replaced by dashes, e.g. `192-168-1-50.lancert.dev`).
+  version: 1.0.0
+  license:
+    name: MIT
+    url: https://github.com/lucor/lancert/blob/main/LICENSE
+
+servers:
+  - url: https://lancert.dev
+
+components:
+  parameters:
+    ip:
+      name: ip
+      in: path
+      required: true
+      description: RFC 1918 private IPv4 address (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16).
+      schema:
+        type: string
+        examples:
+          - "192.168.1.50"
+      example: "192.168.1.50"
+
+  schemas:
+    Certificate:
+      type: object
+      required: [ip, domains, not_after, privkey_pem, fullchain_pem]
+      properties:
+        ip:
+          type: string
+          description: The IP address the certificate was issued for.
+          examples: ["192.168.1.50"]
+        domains:
+          type: array
+          items:
+            type: string
+          description: DNS names covered by the certificate.
+          examples:
+            - ["192-168-1-50.lancert.dev", "*.192-168-1-50.lancert.dev"]
+        not_after:
+          type: string
+          format: date-time
+          description: Certificate expiry time (RFC 3339).
+        privkey_pem:
+          type: string
+          description: PEM-encoded private key.
+        fullchain_pem:
+          type: string
+          description: PEM-encoded certificate chain (leaf + intermediates).
+
+    Pending:
+      type: object
+      required: [status, retry_after]
+      properties:
+        status:
+          type: string
+          const: pending
+        retry_after:
+          type: integer
+          description: Suggested wait time in seconds before polling again.
+          examples: [10]
+
+    TTL:
+      type: object
+      required: [ip, ttl_seconds, ttl_human]
+      properties:
+        ip:
+          type: string
+          examples: ["192.168.1.50"]
+        ttl_seconds:
+          type: integer
+          description: Remaining certificate validity in seconds.
+        ttl_human:
+          type: string
+          description: Human-readable remaining validity (e.g. "89d 23h").
+
+    Stats:
+      type: object
+      required:
+        - cert_count
+        - total_issued
+        - budget_used
+        - budget_limit
+        - budget_resets_in
+        - pending_issuances
+        - failed_issuances
+        - uptime
+      properties:
+        cert_count:
+          type: integer
+          description: Number of certificates currently stored.
+        total_issued:
+          type: integer
+          description: Total certificates issued since process start.
+        budget_used:
+          type: integer
+          description: Certificates issued in the current budget window.
+        budget_limit:
+          type: integer
+          description: Maximum certificates allowed per budget window.
+        budget_resets_in:
+          type: string
+          description: Time until the budget resets (e.g. "6d 12h").
+        pending_issuances:
+          type: integer
+          description: Issuances currently in progress.
+        failed_issuances:
+          type: integer
+          description: Issuances that failed in the current window.
+        uptime:
+          type: string
+          description: Process uptime (e.g. "2d 5h").
+
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          const: ok
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable error message.
+
+  responses:
+    BadRequest:
+      description: Invalid IP address (not a valid RFC 1918 address).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: No certificate found for this IP.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ServerError:
+      description: "Internal server error. Retry-After: 3600 header is included."
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            examples: [3600]
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    AuthorizationFailed:
+      description: ACME authorization failed (Let's Encrypt rejected the DNS-01 challenge).
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            examples: [3600]
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    BudgetExhausted:
+      description: Certificate issuance budget exhausted.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            examples: [3600]
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PropagationTimeout:
+      description: DNS propagation timeout (TXT record not visible within the expected window).
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            examples: [3600]
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Pending:
+      description: Certificate issuance is in progress. Poll again after the indicated delay.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            examples: [10]
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Pending"
+
+paths:
+  /certs/{ip}:
+    parameters:
+      - $ref: "#/components/parameters/ip"
+
+    post:
+      summary: Issue a certificate
+      description: |
+        Triggers certificate issuance for the given IP. Returns immediately
+        with 200 if a usable certificate is already cached, or 202 to indicate
+        issuance is in progress. Rate limited to 1 req/s with burst of 3 per
+        source IP.
+      responses:
+        "200":
+          description: Usable certificate already exists.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Certificate"
+        "202":
+          $ref: "#/components/responses/Pending"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          description: Rate limit exceeded. Only applies to this endpoint.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                examples: [1]
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          $ref: "#/components/responses/BudgetExhausted"
+
+    get:
+      summary: Get certificate status
+      description: |
+        Returns the certificate for the given IP if available, or the current
+        issuance status (pending / failed / not found).
+      responses:
+        "200":
+          description: Certificate is available.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Certificate"
+        "202":
+          $ref: "#/components/responses/Pending"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "502":
+          $ref: "#/components/responses/AuthorizationFailed"
+        "503":
+          $ref: "#/components/responses/BudgetExhausted"
+        "504":
+          $ref: "#/components/responses/PropagationTimeout"
+
+  /certs/{ip}/ttl:
+    parameters:
+      - $ref: "#/components/parameters/ip"
+
+    get:
+      summary: Get certificate TTL
+      description: Returns the remaining validity period of the certificate.
+      responses:
+        "200":
+          description: TTL information.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TTL"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /certs/{ip}/fullchain.pem:
+    parameters:
+      - $ref: "#/components/parameters/ip"
+
+    get:
+      summary: Download certificate chain
+      description: |
+        Returns the PEM-encoded certificate chain as a file download.
+        The filename includes the IP for disambiguation.
+      responses:
+        "200":
+          description: PEM certificate chain.
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+                examples: ['attachment; filename="fullchain-192.168.1.50.pem"']
+          content:
+            application/pem-certificate-chain:
+              schema:
+                type: string
+        "202":
+          $ref: "#/components/responses/Pending"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /certs/{ip}/privkey.pem:
+    parameters:
+      - $ref: "#/components/parameters/ip"
+
+    get:
+      summary: Download private key
+      description: |
+        Returns the PEM-encoded private key as a file download.
+        The filename includes the IP for disambiguation.
+      responses:
+        "200":
+          description: PEM private key.
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+                examples: ['attachment; filename="privkey-192.168.1.50.pem"']
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "202":
+          $ref: "#/components/responses/Pending"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /stats:
+    get:
+      summary: Service statistics
+      description: Returns public statistics about the service.
+      responses:
+        "200":
+          description: Current statistics.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Stats"
+
+  /health:
+    get:
+      summary: Health check
+      description: Simple liveness probe.
+      responses:
+        "200":
+          description: Service is healthy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"

@@ -22,6 +22,12 @@ var indexHTML []byte
 //go:embed static/404.html
 var notFoundHTML []byte
 
+//go:embed static/docs.html
+var docsHTML []byte
+
+//go:embed openapi.yaml
+var openapiYAML []byte
+
 // Handler serves the lancert.dev HTTP API.
 type Handler struct {
 	service *certservice.Service
@@ -71,6 +77,8 @@ func (h *Handler) registerRoutes() {
 	h.mux.HandleFunc("GET /certs/{ip}/privkey.pem", h.handleGetPrivKey)
 	h.mux.HandleFunc("GET /stats", h.handleStats)
 	h.mux.HandleFunc("GET /health", h.handleHealth)
+	h.mux.HandleFunc("GET /docs", handleDocs)
+	h.mux.HandleFunc("GET /openapi.yaml", handleOpenAPI)
 	h.mux.HandleFunc("GET /{$}", handleIndex)
 	h.mux.HandleFunc("GET /", handleNotFound)
 }
@@ -268,6 +276,18 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 func handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write(indexHTML)
+}
+
+// handleDocs serves the Scalar API reference page.
+func handleDocs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(docsHTML)
+}
+
+// handleOpenAPI serves the OpenAPI specification.
+func handleOpenAPI(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+	w.Write(openapiYAML)
 }
 
 // handleNotFound serves a styled 404 page for unknown paths.
