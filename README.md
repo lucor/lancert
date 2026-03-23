@@ -10,7 +10,7 @@ Single-process service with three components:
 
 1. **DNS server** — authoritative for the `lancert.dev` zone. Resolves `*.192-168-1-50.lancert.dev` to `192.168.1.50` by parsing the IP from the subdomain. Serves TXT records for ACME challenges from an in-memory store.
 
-2. **HTTP API** — `POST /certs/{ip}` to issue a certificate, `GET /certs/{ip}` to fetch it, `GET /certs/{ip}/ttl` for remaining validity.
+2. **HTTP API** — `POST /certs/{ip}` to issue a certificate, `GET /certs/{ip}` to fetch it, `GET /certs/{ip}/fullchain.pem` and `GET /certs/{ip}/privkey.pem` for direct PEM downloads, `GET /certs/{ip}/ttl` for remaining validity.
 
 3. **Certificate service** — ACME DNS-01 flow via Let's Encrypt. Each IP gets one certificate covering both `192-168-1-50.lancert.dev` and `*.192-168-1-50.lancert.dev`.
 

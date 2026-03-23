@@ -444,6 +444,14 @@
             <td>Fetch certificate status. <span class="status">200 ready&thinsp;|&thinsp;202 pending&thinsp;|&thinsp;404 not found</span></td>
           </tr>
           <tr>
+            <td><span class="method method-get">GET</span> <code>/certs/{ip}/fullchain.pem</code></td>
+            <td>Download certificate chain (PEM)</td>
+          </tr>
+          <tr>
+            <td><span class="method method-get">GET</span> <code>/certs/{ip}/privkey.pem</code></td>
+            <td>Download private key (PEM)</td>
+          </tr>
+          <tr>
             <td><span class="method method-get">GET</span> <code>/certs/{ip}/ttl</code></td>
             <td>Remaining certificate validity</td>
           </tr>

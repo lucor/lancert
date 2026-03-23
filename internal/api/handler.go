@@ -3,6 +3,7 @@ package api
 import (
 	_ "embed"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/netip"
@@ -64,6 +65,10 @@ func (h *Handler) registerRoutes() {
 		GzipResponse(http.HandlerFunc(h.handleGetCert)))
 	h.mux.Handle("GET /certs/{ip}/ttl",
 		GzipResponse(http.HandlerFunc(h.handleGetTTL)))
+	// PEM downloads skip GzipResponse: files are small (~2-3KB) and
+	// compressing secret material adds unnecessary risk.
+	h.mux.HandleFunc("GET /certs/{ip}/fullchain.pem", h.handleGetFullChain)
+	h.mux.HandleFunc("GET /certs/{ip}/privkey.pem", h.handleGetPrivKey)
 	h.mux.HandleFunc("GET /stats", h.handleStats)
 	h.mux.HandleFunc("GET /health", h.handleHealth)
 	h.mux.HandleFunc("GET /{$}", handleIndex)
@@ -90,7 +95,6 @@ func (h *Handler) handleIssueCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if bundle != nil {
-		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusOK, certResponse(addr, bundle))
 		return
 	}
@@ -132,7 +136,6 @@ func (h *Handler) handleGetCert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if status.Bundle != nil {
-		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusOK, certResponse(addr, status.Bundle))
 		return
 	}
@@ -170,6 +173,74 @@ func (h *Handler) handleGetTTL(w http.ResponseWriter, r *http.Request) {
 		"ttl_seconds": int(ttl.Seconds()),
 		"ttl_human":   formatDuration(ttl),
 	})
+}
+
+const (
+	pemFullChain = "fullchain"
+	pemPrivKey   = "privkey"
+)
+
+// handleGetFullChain returns the certificate chain as a PEM file download.
+func (h *Handler) handleGetFullChain(w http.ResponseWriter, r *http.Request) {
+	h.servePEM(w, r, pemFullChain)
+}
+
+// handleGetPrivKey returns the private key as a PEM file download.
+func (h *Handler) handleGetPrivKey(w http.ResponseWriter, r *http.Request) {
+	h.servePEM(w, r, pemPrivKey)
+}
+
+// servePEM validates the IP, resolves cert status, and writes the selected
+// PEM data as a file download. Error/status behavior mirrors handleGetCert.
+func (h *Handler) servePEM(w http.ResponseWriter, r *http.Request, kind string) {
+	addr, err := privateip.ValidateRFC1918(r.PathValue("ip"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	status, err := h.service.GetStatus(addr)
+	if err != nil {
+		slog.Error("api: get cert error", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to read certificate")
+		return
+	}
+
+	if status.Bundle != nil {
+		var contentType string
+		var data []byte
+		if kind == pemFullChain {
+			contentType = "application/pem-certificate-chain"
+			data = status.Bundle.FullChainPEM
+		} else {
+			// application/octet-stream: no standard MIME type exists for
+			// PEM-encoded private keys; octet-stream triggers a download
+			// in browsers rather than rendering.
+			contentType = "application/octet-stream"
+			data = status.Bundle.PrivKeyPEM
+		}
+
+		w.Header().Set("Content-Type", contentType)
+		// Include IP in filename so downloading certs for multiple IPs
+		// does not overwrite previous files.
+		w.Header().Set("Content-Disposition",
+			fmt.Sprintf(`attachment; filename="%s-%s.pem"`, kind, addr.String()))
+		w.Write(data)
+		return
+	}
+
+	if status.Pending {
+		w.Header().Set("Retry-After", "10")
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	if status.Fail != nil {
+		writeError(w, status.Fail.Status, status.Fail.Msg)
+		return
+	}
+
+	writeError(w, http.StatusNotFound, "no certificate found for this IP")
 }
 
 // handleStats returns public stats.
