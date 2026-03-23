@@ -52,7 +52,7 @@ func run() error {
 		email    string
 		serverIP string
 		staging  bool
-		noPregen bool
+		pregen bool
 	)
 
 	flag.StringVar(&dnsAddr, "dns-addr", envOr("LANCERT_DNS_ADDR", defaultDNSAddr), "DNS listen address")
@@ -61,7 +61,7 @@ func run() error {
 	flag.StringVar(&email, "email", envOr("LANCERT_EMAIL", ""), "email for Let's Encrypt account (optional)")
 	flag.StringVar(&serverIP, "server-ip", envOr("LANCERT_SERVER_IP", ""), "public IP of this server (required, used for DNS A records)")
 	flag.BoolVar(&staging, "staging", envBool("LANCERT_STAGING"), "use Let's Encrypt staging environment")
-	flag.BoolVar(&noPregen, "no-pregen", envBool("LANCERT_NO_PREGEN"), "skip certificate pre-generation at startup")
+	flag.BoolVar(&pregen, "pregen", envBool("LANCERT_PREGEN"), "pre-generate certificates for common IPs at startup")
 	flag.Parse()
 
 	if serverIP == "" {
@@ -176,7 +176,7 @@ func run() error {
 	slog.Warn("HTTP API serves private keys over plaintext — use a TLS-terminating reverse proxy in production")
 
 	// Pre-generate certificates for common IPs in the background
-	if !noPregen {
+	if pregen {
 		go certSvc.Pregen(ctx)
 	}
 

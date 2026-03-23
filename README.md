@@ -45,7 +45,7 @@ go build -o lancert ./cmd/lancert/
 | `-data-dir` | `data` | Data directory for certs and keys |
 | `-email` | | Email for Let's Encrypt account |
 | `-staging` | `false` | Use Let's Encrypt staging |
-| `-no-pregen` | `false` | Skip certificate pre-generation at startup |
+| `-pregen` | `false` | Pre-generate certificates for common IPs at startup |
 
 ## Supported IPs
 
