@@ -24,9 +24,16 @@ func Chain(h http.Handler, mws ...Middleware) http.Handler {
 	return h
 }
 
-// RequestLogging logs method, path, status, and duration for each request.
+// RequestLogging logs method, path, status, and duration for API requests.
+// Only /certs/ paths are logged — operational endpoints, static pages, and
+// bot probes are silenced to reduce noise.
 func RequestLogging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/certs/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 
