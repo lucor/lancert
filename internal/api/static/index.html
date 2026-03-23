@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>lancert — TLS certificates for private IPs</title>
-<meta name="description" content="Real Let's Encrypt wildcard TLS certificates for private RFC 1918 IPs. One curl, valid HTTPS on your LAN.">
+<title>lancert — Real Let's Encrypt Certificates for Local Development on Private IPs</title>
+<meta name="description" content="Real Let's Encrypt wildcard TLS certificates for private RFC 1918 IPs, designed for local development. One curl, valid HTTPS on your LAN.">
 <script defer src="https://analytics.lucor.dev/script.js" data-website-id="1c9b0509-2f00-493b-bb0a-da02ffb6ff1d"></script>
 <style>
   :root {
@@ -276,6 +276,32 @@
     background: #252525;
   }
 
+  /* ── SECURITY CALLOUT ── */
+  .security-callout {
+    border: 1px solid #e5c07b;
+    border-radius: 10px;
+    padding: 28px 28px 24px;
+    background: #fffbf0;
+  }
+
+  .security-callout h3 {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--ink);
+    margin-bottom: 12px;
+  }
+
+  .security-callout p {
+    font-size: 14px;
+    color: var(--text);
+    line-height: 1.65;
+    margin-bottom: 12px;
+  }
+
+  .security-callout p:last-child { margin-bottom: 0; }
+
+  .security-callout strong { color: var(--ink); }
+
   /* ── HOW IT WORKS (TIMELINE) ── */
   .timeline {
     display: flex;
@@ -499,6 +525,7 @@
   <a href="/" class="logo"><span class="lan">lan</span><span class="cert">cert</span></a>
   <div class="nav-links">
     <a href="#why">Why</a>
+    <a href="#security">Security</a>
     <a href="#how">How it works</a>
     <a href="/docs">API Docs</a>
     <a href="#example">Example</a>
@@ -512,10 +539,10 @@
 
 <main>
 <header class="hero">
-  <h1>TLS certificates for<br>private IPs</h1>
+  <h1>Real Let's Encrypt Certificates for Local Development on Private IPs</h1>
   <p class="subtitle">
-    Real Let's Encrypt certificates for your LAN.
-    One <code>curl</code>, valid HTTPS on <code>192.168.x.x</code>
+    Wildcard TLS certificates for RFC 1918 IPs.
+    One <code>curl</code>, valid HTTPS on your LAN.
   </p>
 
   <div class="hero-terminal">
@@ -579,11 +606,11 @@
   <div class="features">
     <div class="feat">
       <h3>Real certificates</h3>
-      <p>Trusted by every browser and device. No local CA, no manual setup, no warnings.</p>
+      <p>Real Let's Encrypt certificates, trusted by every browser on every device. No custom CA to install, no per-device setup, no warnings.</p>
     </div>
     <div class="feat">
-      <h3>Works on mobile</h3>
-      <p>Service workers, push notifications, WebRTC — anything that needs a secure context.</p>
+      <h3>Test from any device</h3>
+      <p>Service Workers, push notifications, WebRTC — anything that requires HTTPS on a real device on your LAN.</p>
     </div>
     <div class="feat">
       <h3>One curl</h3>
@@ -591,8 +618,19 @@
     </div>
     <div class="feat">
       <h3>Wildcard included</h3>
-      <p>Each cert covers the base domain and all subdomains under your IP.</p>
+      <p>Each cert covers the base domain and <code>*.192-168-1-50.lancert.dev</code> — use any subdomain without requesting additional certificates.</p>
     </div>
+  </div>
+</section>
+
+<!-- SECURITY -->
+<section class="section" id="security">
+  <h2>Security</h2>
+  <div class="security-callout">
+    <h3>lancert does not provide confidentiality</h3>
+    <p>The private keys are served via API to anyone who requests them. There is no ownership concept for private IPs — <code>192.168.1.50</code> on your network is the same address as <code>192.168.1.50</code> on someone else's. Anyone who knows the IP can download the same certificate and private key.</p>
+    <p>The browser will show a valid HTTPS connection, but <strong>this does not mean the traffic is protected</strong> from other devices on the same network.</p>
+    <p>The threat model is simple: you trust your local network enough to develop on it, and you need the browser to trust your certificate. That's it. Do not use these certificates in production.</p>
   </div>
 </section>
 
@@ -723,7 +761,7 @@ curl -o privkey.pem https://lancert.dev/certs/192.168.1.50/privkey.pem"><svg ari
     </details>
     <details>
       <summary>Is this safe to use?</summary>
-      <p>lancert is designed for local development only. There is no ownership model for private IPs — anyone can request a certificate for any RFC 1918 address. Security relies on your LAN being isolated. Do not use these certificates in production.</p>
+      <p>lancert is designed for local development only. The private keys are served via API to anyone who requests them — there is no ownership model for private IPs. The browser will show a valid HTTPS connection, but this does not mean the traffic is protected from other devices on the same network. See the <a href="#security">Security</a> section for details. Do not use these certificates in production.</p>
     </details>
   </div>
 </section>

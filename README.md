@@ -1,4 +1,4 @@
-# lancert.dev
+# lancert
 
 Real Let's Encrypt wildcard TLS certificates for private RFC 1918 IPs, designed for local development.
 
@@ -13,6 +13,15 @@ Single-process service with three components:
 2. **HTTP API** — `POST /certs/{ip}` to issue a certificate, `GET /certs/{ip}` to fetch it, `GET /certs/{ip}/fullchain.pem` and `GET /certs/{ip}/privkey.pem` for direct PEM downloads, `GET /certs/{ip}/ttl` for remaining validity.
 
 3. **Certificate service** — ACME DNS-01 flow via Let's Encrypt. Each IP gets one certificate covering both `192-168-1-50.lancert.dev` and `*.192-168-1-50.lancert.dev`.
+
+## Security
+
+> [!WARNING]
+> lancert does not provide confidentiality. The private keys are served via API to anyone who requests them. There is no ownership concept for private IPs — `192.168.1.50` on your network is the same address as `192.168.1.50` on someone else's. Anyone who knows the IP can download the same certificate and private key.
+>
+> The browser will show a valid HTTPS connection, but this does not mean the traffic is protected from other devices on the same network.
+>
+> The threat model is simple: you trust your local network enough to develop on it, and you need the browser to trust your certificate. That's it. Do not use these certificates in production.
 
 ## Usage
 
