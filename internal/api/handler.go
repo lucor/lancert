@@ -114,8 +114,7 @@ func (h *Handler) handleIssueCert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Pending (newly triggered or already in progress).
-	w.Header().Set("Retry-After", "10")
-	w.WriteHeader(http.StatusAccepted)
+	writePending(w, pendingRetryAfter)
 }
 
 // handleGetCert returns the certificate status for the given IP.
@@ -141,8 +140,7 @@ func (h *Handler) handleGetCert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if status.Pending {
-		w.Header().Set("Retry-After", "10")
-		w.WriteHeader(http.StatusAccepted)
+		writePending(w, pendingRetryAfter)
 		return
 	}
 
@@ -176,6 +174,10 @@ func (h *Handler) handleGetTTL(w http.ResponseWriter, r *http.Request) {
 }
 
 const (
+	// pendingRetryAfter is the Retry-After value (in seconds) sent with
+	// 202 responses to tell clients how long to wait before polling again.
+	pendingRetryAfter = 10
+
 	pemFullChain = "fullchain"
 	pemPrivKey   = "privkey"
 )
@@ -230,8 +232,7 @@ func (h *Handler) servePEM(w http.ResponseWriter, r *http.Request, kind string) 
 	}
 
 	if status.Pending {
-		w.Header().Set("Retry-After", "10")
-		w.WriteHeader(http.StatusAccepted)
+		writePending(w, pendingRetryAfter)
 		return
 	}
 
@@ -303,6 +304,16 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 	if err := json.NewEncoder(w).Encode(data); err != nil {
 		slog.Error("http: json encode error", "error", err)
 	}
+}
+
+// writePending writes a 202 Accepted response with Retry-After header
+// and a JSON body indicating the request is pending.
+func writePending(w http.ResponseWriter, retryAfter int) {
+	w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status":      "pending",
+		"retry_after": retryAfter,
+	})
 }
 
 // writeError writes a JSON error response. For 5xx errors, sets

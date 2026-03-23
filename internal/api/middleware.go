@@ -94,6 +94,7 @@ func PerIPRateLimit(rps rate.Limit, burst int, done <-chan struct{}) Middleware 
 			mu.Unlock()
 
 			if !e.limiter.Allow() {
+				w.Header().Set("Retry-After", "1")
 				writeError(w, http.StatusTooManyRequests, "rate limit exceeded, try again later")
 				return
 			}
