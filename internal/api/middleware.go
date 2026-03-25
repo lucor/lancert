@@ -4,7 +4,6 @@ import (
 	"compress/gzip"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -27,6 +26,7 @@ func Chain(h http.Handler, mws ...Middleware) http.Handler {
 // RequestLogging logs method, path, status, and duration for API requests.
 // Only /certs/ paths are logged — operational endpoints, static pages, and
 // bot probes are silenced to reduce noise.
+// Reads the obfuscated client IP from the request context (set by ClientIP middleware).
 func RequestLogging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/certs/") {
@@ -44,7 +44,7 @@ func RequestLogging(next http.Handler) http.Handler {
 			"path", r.URL.Path,
 			"status", sw.status,
 			"duration", time.Since(start).Round(time.Millisecond),
-			"client_ip", clientIP(r),
+			"client_ip", ClientIPFrom(r),
 		)
 	})
 }
@@ -82,7 +82,7 @@ func PerIPRateLimit(rps rate.Limit, burst int, done <-chan struct{}) Middleware 
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := clientIP(r)
+			ip := ClientIPFrom(r)
 
 			mu.Lock()
 			e, ok := limiters[ip]
@@ -176,15 +176,3 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
-// clientIP extracts the client IP from RemoteAddr.
-// Does not trust X-Forwarded-For or X-Real-IP headers as they are
-// trivially spoofable — trusting them would let attackers bypass the
-// per-IP rate limiter. If running behind a trusted reverse proxy,
-// configure the proxy to set RemoteAddr or use PROXY protocol.
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}

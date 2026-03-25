@@ -124,10 +124,23 @@ func run() error {
 		txtStore,
 	)
 
+	// Trusted proxy subnet for X-Forwarded-For extraction.
+	// Set LANCERT_TRUSTED_PROXY to a CIDR (e.g. "172.20.0.0/16") when behind
+	// a reverse proxy (Traefik, Nginx, etc.) so that real client IPs are
+	// extracted from X-Forwarded-For for logging and rate limiting.
+	var proxySubnet netip.Prefix
+	if v := os.Getenv("LANCERT_TRUSTED_PROXY"); v != "" {
+		proxySubnet, err = netip.ParsePrefix(v)
+		if err != nil {
+			return fmt.Errorf("invalid LANCERT_TRUSTED_PROXY: %q (must be a CIDR like 172.20.0.0/16)", v)
+		}
+	}
+
 	// HTTP API with middleware stack
 	apiHandler := api.New(certSvc)
 	handler := api.Chain(apiHandler,
 		api.Recover,
+		api.ClientIP(proxySubnet),
 		api.SecurityHeaders,
 		api.RequestLogging,
 	)
