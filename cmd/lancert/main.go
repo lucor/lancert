@@ -142,6 +142,7 @@ func run() error {
 	if ipHashSecret == "" {
 		return fmt.Errorf("LANCERT_IP_HASH_SALT is required")
 	}
+	realIP := api.NewRealIP(proxySubnet)
 	ipHasher := api.NewIPHasher(ipHashSecret)
 
 	// HTTP API with middleware stack
@@ -149,7 +150,7 @@ func run() error {
 	handler := api.Chain(apiHandler,
 		api.Recover,
 		api.SecurityHeaders,
-		api.ClientIP(proxySubnet),
+		realIP.Middleware,
 		ipHasher.Middleware,
 		api.RequestLogging,
 	)

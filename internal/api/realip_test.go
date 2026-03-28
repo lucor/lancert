@@ -9,9 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestResolveIP(t *testing.T) {
+func TestRealIP_Resolve(t *testing.T) {
 	proxySubnet := netip.MustParsePrefix("172.20.0.0/16")
-	noProxy := netip.Prefix{}
 
 	tests := []struct {
 		name       string
@@ -22,13 +21,13 @@ func TestResolveIP(t *testing.T) {
 	}{
 		{
 			name:       "direct connection, no proxy configured",
-			proxy:      noProxy,
+			proxy:      netip.Prefix{},
 			remoteAddr: "95.12.34.56:54321",
 			want:       "95.12.34.56",
 		},
 		{
 			name:       "direct connection, spoofed XFF ignored",
-			proxy:      noProxy,
+			proxy:      netip.Prefix{},
 			remoteAddr: "95.12.34.56:54321",
 			xff:        "1.2.3.4",
 			want:       "95.12.34.56",
@@ -78,6 +77,7 @@ func TestResolveIP(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			rip := NewRealIP(tt.proxy)
 			req := &http.Request{
 				RemoteAddr: tt.remoteAddr,
 				Header:     http.Header{},
@@ -86,14 +86,14 @@ func TestResolveIP(t *testing.T) {
 				req.Header.Set("X-Forwarded-For", tt.xff)
 			}
 
-			got := resolveIP(req, tt.proxy)
+			got := rip.Resolve(req)
 			assert.Equal(t, tt.want, got)
 		})
 	}
 }
 
-func TestResolveIP_MultipleXFFHeaders(t *testing.T) {
-	proxySubnet := netip.MustParsePrefix("172.20.0.0/16")
+func TestRealIP_Resolve_MultipleXFFHeaders(t *testing.T) {
+	rip := NewRealIP(netip.MustParsePrefix("172.20.0.0/16"))
 	req := &http.Request{
 		RemoteAddr: "172.20.0.2:12345",
 		Header:     http.Header{},
@@ -101,7 +101,7 @@ func TestResolveIP_MultipleXFFHeaders(t *testing.T) {
 	req.Header.Add("X-Forwarded-For", "1.1.1.1")    // spoofed by attacker
 	req.Header.Add("X-Forwarded-For", "95.12.34.56") // appended by proxy
 
-	got := resolveIP(req, proxySubnet)
+	got := rip.Resolve(req)
 	assert.Equal(t, "95.12.34.56", got)
 }
 

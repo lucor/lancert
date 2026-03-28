@@ -22,8 +22,8 @@ import (
 
 type clientIPCtxKey struct{}
 
-// ClientIPFromContext reads the resolved plain client IP stored by the
-// ClientIP middleware. Returns the IP and true if present.
+// ClientIPFromContext returns the canonical client IP for the request,
+// resolved by RealIP from RemoteAddr or trusted X-Forwarded-For.
 func ClientIPFromContext(ctx context.Context) (string, bool) {
 	v, ok := ctx.Value(clientIPCtxKey{}).(string)
 	return v, ok
@@ -34,29 +34,28 @@ func WithClientIP(ctx context.Context, ip string) context.Context {
 	return context.WithValue(ctx, clientIPCtxKey{}, ip)
 }
 
-// ClientIP returns a middleware that resolves the real client IP and stores
-// it in the request context.
+// RealIP resolves the real client IP from RemoteAddr or X-Forwarded-For
+// based on a trusted proxy subnet.
+type RealIP struct {
+	proxySubnet netip.Prefix
+}
+
+// NewRealIP creates a RealIP resolver.
 // proxySubnet is the CIDR of the trusted reverse proxy (e.g. "172.20.0.0/16").
 // Pass netip.Prefix{} (zero value) for direct connections with no proxy.
 //
 // Use the narrowest possible CIDR (ideally /32 for a single proxy IP).
 // A wide subnet trusts any peer within it, which in shared networks could
 // allow other hosts to spoof X-Forwarded-For.
-func ClientIP(proxySubnet netip.Prefix) Middleware {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := resolveIP(r, proxySubnet)
-			ctx := WithClientIP(r.Context(), ip)
-			next.ServeHTTP(w, r.WithContext(ctx))
-		})
-	}
+func NewRealIP(proxySubnet netip.Prefix) *RealIP {
+	return &RealIP{proxySubnet: proxySubnet}
 }
 
-// resolveIP extracts the real client IP from the request.
+// Resolve extracts the real client IP from the request.
 // If proxySubnet is configured and RemoteAddr falls within it, the
 // rightmost X-Forwarded-For entry is used. Otherwise RemoteAddr is
 // returned directly.
-func resolveIP(r *http.Request, proxySubnet netip.Prefix) string {
+func (rip *RealIP) Resolve(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
@@ -68,7 +67,7 @@ func resolveIP(r *http.Request, proxySubnet netip.Prefix) string {
 	}
 	peer = peer.Unmap()
 
-	if !proxySubnet.IsValid() || !proxySubnet.Contains(peer) {
+	if !rip.proxySubnet.IsValid() || !rip.proxySubnet.Contains(peer) {
 		return peer.String()
 	}
 
@@ -81,6 +80,15 @@ func resolveIP(r *http.Request, proxySubnet netip.Prefix) string {
 	}
 
 	return peer.String()
+}
+
+// Middleware stores the resolved client IP in the request context.
+func (rip *RealIP) Middleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip := rip.Resolve(r)
+		ctx := WithClientIP(r.Context(), ip)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 // rightmostXFF returns the rightmost valid IP from an X-Forwarded-For

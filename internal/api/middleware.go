@@ -36,7 +36,8 @@ func RequestLogging(next http.Handler) http.Handler {
 
 		ip, ok := HashedIPFromContext(r.Context())
 		if !ok {
-			writeError(w, http.StatusInternalServerError, "missing hashed IP in context")
+			slog.Error("request logging: missing hashed IP in context")
+			writeError(w, http.StatusInternalServerError, "internal server error")
 			return
 		}
 
@@ -90,7 +91,8 @@ func PerIPRateLimit(rps rate.Limit, burst int, done <-chan struct{}) Middleware 
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ip, ok := HashedIPFromContext(r.Context())
 			if !ok {
-				writeError(w, http.StatusInternalServerError, "missing hashed IP in context")
+				slog.Error("rate limiter: missing hashed IP in context")
+				writeError(w, http.StatusInternalServerError, "internal server error")
 				return
 			}
 

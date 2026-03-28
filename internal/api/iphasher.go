@@ -43,7 +43,7 @@ func (h *IPHasher) Hash(ip string) string {
 }
 
 // Middleware reads the plain client IP from context, hashes it,
-// and stores the result. Requires the ClientIP middleware to run first.
+// and stores the result. Requires the RealIP middleware to run first.
 func (h *IPHasher) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip, ok := ClientIPFromContext(r.Context())
