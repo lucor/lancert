@@ -26,11 +26,17 @@ func Chain(h http.Handler, mws ...Middleware) http.Handler {
 // RequestLogging logs method, path, status, and duration for API requests.
 // Only /certs/ paths are logged — operational endpoints, static pages, and
 // bot probes are silenced to reduce noise.
-// Reads the obfuscated client IP from the request context (set by ClientIP middleware).
+// Reads the hashed client IP from the request context (set by IPHasher middleware).
 func RequestLogging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/certs/") {
 			next.ServeHTTP(w, r)
+			return
+		}
+
+		ip, ok := HashedIPFromContext(r.Context())
+		if !ok {
+			writeError(w, http.StatusInternalServerError, "missing hashed IP in context")
 			return
 		}
 
@@ -44,7 +50,7 @@ func RequestLogging(next http.Handler) http.Handler {
 			"path", r.URL.Path,
 			"status", sw.status,
 			"duration", time.Since(start).Round(time.Millisecond),
-			"client_ip", ClientIPFrom(r),
+			"client_ip", ip,
 		)
 	})
 }
@@ -82,7 +88,11 @@ func PerIPRateLimit(rps rate.Limit, burst int, done <-chan struct{}) Middleware 
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := ClientIPFrom(r)
+			ip, ok := HashedIPFromContext(r.Context())
+			if !ok {
+				writeError(w, http.StatusInternalServerError, "missing hashed IP in context")
+				return
+			}
 
 			mu.Lock()
 			e, ok := limiters[ip]

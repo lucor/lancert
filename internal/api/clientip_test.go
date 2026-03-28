@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"net/netip"
 	"testing"
@@ -13,11 +14,11 @@ func TestResolveIP(t *testing.T) {
 	noProxy := netip.Prefix{}
 
 	tests := []struct {
-		name        string
-		proxy       netip.Prefix
-		remoteAddr  string
-		xff         string
-		want        string
+		name       string
+		proxy      netip.Prefix
+		remoteAddr string
+		xff        string
+		want       string
 	}{
 		{
 			name:       "direct connection, no proxy configured",
@@ -91,45 +92,35 @@ func TestResolveIP(t *testing.T) {
 	}
 }
 
-func TestObfuscateIP(t *testing.T) {
-	// Deterministic: same input → same output
-	a := obfuscateIP("95.12.34.56")
-	b := obfuscateIP("95.12.34.56")
-	assert.Equal(t, a, b)
-	assert.Len(t, a, 16)
-
-	// Different IPs → different hashes
-	c := obfuscateIP("10.0.0.1")
-	assert.NotEqual(t, a, c)
-}
-
 func TestResolveIP_MultipleXFFHeaders(t *testing.T) {
-	// Attacker sends a spoofed X-Forwarded-For header; the proxy appends
-	// the real client IP as a separate header. We must read the rightmost
-	// value across all headers, not just the first one.
 	proxySubnet := netip.MustParsePrefix("172.20.0.0/16")
 	req := &http.Request{
 		RemoteAddr: "172.20.0.2:12345",
 		Header:     http.Header{},
 	}
-	req.Header.Add("X-Forwarded-For", "1.1.1.1")   // spoofed by attacker
+	req.Header.Add("X-Forwarded-For", "1.1.1.1")    // spoofed by attacker
 	req.Header.Add("X-Forwarded-For", "95.12.34.56") // appended by proxy
 
 	got := resolveIP(req, proxySubnet)
 	assert.Equal(t, "95.12.34.56", got)
 }
 
-func TestClientIPFrom_Fallback(t *testing.T) {
-	// Without middleware, falls back to obfuscated RemoteAddr.
-	req := &http.Request{RemoteAddr: "95.12.34.56:54321"}
-	got := ClientIPFrom(req)
-	want := obfuscateIP("95.12.34.56")
-	assert.Equal(t, want, got)
+func TestClientIPFromContext(t *testing.T) {
+	ctx := WithClientIP(context.Background(), "95.12.34.56")
+	ip, ok := ClientIPFromContext(ctx)
+	assert.True(t, ok)
+	assert.Equal(t, "95.12.34.56", ip)
+
+	_, ok = ClientIPFromContext(context.Background())
+	assert.False(t, ok)
 }
 
-func TestClientIPFrom_IPv6MappedConsistency(t *testing.T) {
-	// IPv4 and IPv4-mapped IPv6 must produce the same hash.
-	r4 := &http.Request{RemoteAddr: "95.12.34.56:1234"}
-	r6 := &http.Request{RemoteAddr: "[::ffff:95.12.34.56]:1234"}
-	assert.Equal(t, ClientIPFrom(r4), ClientIPFrom(r6))
+func TestHashedIPFromContext(t *testing.T) {
+	ctx := WithHashedIP(context.Background(), "abc123")
+	ip, ok := HashedIPFromContext(ctx)
+	assert.True(t, ok)
+	assert.Equal(t, "abc123", ip)
+
+	_, ok = HashedIPFromContext(context.Background())
+	assert.False(t, ok)
 }

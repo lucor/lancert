@@ -136,12 +136,21 @@ func run() error {
 		}
 	}
 
+	// Secret key for IP hashing (keyed BLAKE2b). Required so that hashed IPs
+	// in logs and rate-limit buckets cannot be reversed via rainbow tables.
+	ipHashSecret := os.Getenv("LANCERT_IP_HASH_SALT")
+	if ipHashSecret == "" {
+		return fmt.Errorf("LANCERT_IP_HASH_SALT is required")
+	}
+	ipHasher := api.NewIPHasher(ipHashSecret)
+
 	// HTTP API with middleware stack
 	apiHandler := api.New(certSvc)
 	handler := api.Chain(apiHandler,
 		api.Recover,
-		api.ClientIP(proxySubnet),
 		api.SecurityHeaders,
+		api.ClientIP(proxySubnet),
+		ipHasher.Middleware,
 		api.RequestLogging,
 	)
 

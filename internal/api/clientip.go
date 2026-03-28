@@ -5,8 +5,7 @@ package api
 // Inspired by github.com/realclientip/realclientip-go — when a trusted
 // proxy subnet is configured, X-Forwarded-For is only read if RemoteAddr
 // falls within that subnet. The rightmost XFF entry (appended by the
-// proxy) is used as the real client IP. All IPs are obfuscated before
-// storage.
+// proxy) is used as the real client IP.
 //
 // This implementation supports a single trusted proxy (e.g. Traefik, Nginx),
 // which covers the realistic deployment scenarios for lancert. Multi-proxy
@@ -15,20 +14,28 @@ package api
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"net"
 	"net/http"
 	"net/netip"
 	"strings"
 )
 
-type contextKey int
+type clientIPCtxKey struct{}
 
-const clientIPKey contextKey = iota
+// ClientIPFromContext reads the resolved plain client IP stored by the
+// ClientIP middleware. Returns the IP and true if present.
+func ClientIPFromContext(ctx context.Context) (string, bool) {
+	v, ok := ctx.Value(clientIPCtxKey{}).(string)
+	return v, ok
+}
 
-// ClientIP returns a middleware that resolves the real client IP, obfuscates
-// it with a one-way hash, and stores the result in the request context.
+// WithClientIP returns a copy of ctx with the plain client IP stored.
+func WithClientIP(ctx context.Context, ip string) context.Context {
+	return context.WithValue(ctx, clientIPCtxKey{}, ip)
+}
+
+// ClientIP returns a middleware that resolves the real client IP and stores
+// it in the request context.
 // proxySubnet is the CIDR of the trusted reverse proxy (e.g. "172.20.0.0/16").
 // Pass netip.Prefix{} (zero value) for direct connections with no proxy.
 //
@@ -39,20 +46,10 @@ func ClientIP(proxySubnet netip.Prefix) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ip := resolveIP(r, proxySubnet)
-			ctx := context.WithValue(r.Context(), clientIPKey, obfuscateIP(ip))
+			ctx := WithClientIP(r.Context(), ip)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
-}
-
-// ClientIPFrom reads the obfuscated client IP from the request context.
-// Falls back to obfuscating RemoteAddr if the ClientIP middleware is not
-// in the chain (e.g. in tests).
-func ClientIPFrom(r *http.Request) string {
-	if v, ok := r.Context().Value(clientIPKey).(string); ok {
-		return v
-	}
-	return obfuscateIP(canonicalIP(r.RemoteAddr))
 }
 
 // resolveIP extracts the real client IP from the request.
@@ -102,27 +99,4 @@ func rightmostXFF(xff string) string {
 		return ""
 	}
 	return addr.Unmap().String()
-}
-
-// canonicalIP extracts the IP from a host:port string and normalises
-// IPv4-mapped IPv6 addresses so the same client always produces the
-// same obfuscated hash.
-func canonicalIP(remoteAddr string) string {
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		host = remoteAddr
-	}
-	addr, err := netip.ParseAddr(host)
-	if err != nil {
-		return host
-	}
-	return addr.Unmap().String()
-}
-
-// obfuscateIP hashes an IP address so it can be used as a rate-limit key
-// and logged without storing plaintext client IPs.
-// Returns the first 16 hex characters of the SHA-256 digest.
-func obfuscateIP(ip string) string {
-	h := sha256.Sum256([]byte(ip))
-	return hex.EncodeToString(h[:8])
 }
