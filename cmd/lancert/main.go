@@ -142,8 +142,14 @@ func run() error {
 	if ipHashSecret == "" {
 		return fmt.Errorf("LANCERT_IP_HASH_SALT is required")
 	}
+	// Graceful shutdown context — created early so background goroutines
+	// (e.g. rate limiter cleanup) can use it as their lifecycle signal.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	realIP := api.NewRealIP(proxySubnet)
 	ipHasher := api.NewIPHasher(ipHashSecret)
+	rateLimiter := api.NewRateLimiter(ctx, api.IssuanceRPS, api.IssuanceBurst)
 
 	// HTTP API with middleware stack
 	apiHandler := api.New(certSvc)
@@ -152,6 +158,7 @@ func run() error {
 		api.SecurityHeaders,
 		realIP.Middleware,
 		ipHasher.Middleware,
+		rateLimiter.Middleware,
 		api.RequestLogging,
 	)
 
@@ -163,10 +170,6 @@ func run() error {
 		WriteTimeout:      30 * time.Second, // POST returns immediately; issuance is async
 		IdleTimeout:       60 * time.Second,
 	}
-
-	// Graceful shutdown
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	// Start DNS and HTTP servers; fatal if either fails to bind.
 	startupErr := make(chan error, 2)
@@ -218,9 +221,6 @@ func run() error {
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		slog.Error("http shutdown error", "error", err)
 	}
-
-	// Stop handler background goroutines (rate limiter cleanup)
-	apiHandler.Close()
 
 	if err := dnsServer.Shutdown(); err != nil {
 		slog.Error("dns shutdown error", "error", err)

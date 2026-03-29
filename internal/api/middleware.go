@@ -6,10 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
-
-	"golang.org/x/time/rate"
 )
 
 // Middleware wraps an http.Handler.
@@ -54,66 +51,6 @@ func RequestLogging(next http.Handler) http.Handler {
 			"client_ip", ip,
 		)
 	})
-}
-
-// PerIPRateLimit returns a middleware that limits requests per source IP.
-// rps is the steady-state rate (requests/second), burst is the burst size.
-// The done channel stops the background cleanup goroutine when closed.
-func PerIPRateLimit(rps rate.Limit, burst int, done <-chan struct{}) Middleware {
-	var (
-		mu       sync.Mutex
-		limiters = make(map[string]*entry)
-	)
-
-	// Periodically clean up stale entries
-	go func() {
-		ticker := time.NewTicker(10 * time.Minute)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-done:
-				return
-			case <-ticker.C:
-				mu.Lock()
-				now := time.Now()
-				for ip, e := range limiters {
-					if now.Sub(e.lastSeen) > 30*time.Minute {
-						delete(limiters, ip)
-					}
-				}
-				mu.Unlock()
-			}
-		}
-	}()
-
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip, ok := HashedIPFromContext(r.Context())
-			if !ok {
-				slog.Error("rate limiter: missing hashed IP in context")
-				writeError(w, http.StatusInternalServerError, "internal server error")
-				return
-			}
-
-			mu.Lock()
-			e, ok := limiters[ip]
-			if !ok {
-				e = &entry{limiter: rate.NewLimiter(rps, burst)}
-				limiters[ip] = e
-			}
-			e.lastSeen = time.Now()
-			mu.Unlock()
-
-			if !e.limiter.Allow() {
-				w.Header().Set("Retry-After", "1")
-				writeError(w, http.StatusTooManyRequests, "rate limit exceeded, try again later")
-				return
-			}
-
-			next.ServeHTTP(w, r)
-		})
-	}
 }
 
 // GzipResponse compresses responses with gzip when the client accepts it.
@@ -171,11 +108,6 @@ func Recover(next http.Handler) http.Handler {
 		}()
 		next.ServeHTTP(w, r)
 	})
-}
-
-type entry struct {
-	limiter  *rate.Limiter
-	lastSeen time.Time
 }
 
 type statusWriter struct {

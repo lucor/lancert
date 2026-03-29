@@ -32,28 +32,16 @@ var openapiYAML []byte
 type Handler struct {
 	service *certservice.Service
 	mux     *http.ServeMux
-	done    chan struct{}
 }
 
 // New creates an API handler wired to the given cert service.
 func New(svc *certservice.Service) *Handler {
 	h := &Handler{
 		service: svc,
-		done:    make(chan struct{}),
 	}
 	h.mux = http.NewServeMux()
 	h.registerRoutes()
 	return h
-}
-
-// Close stops background goroutines (e.g. rate limiter cleanup).
-// Safe to call multiple times.
-func (h *Handler) Close() {
-	select {
-	case <-h.done:
-	default:
-		close(h.done)
-	}
 }
 
 // ServeHTTP implements http.Handler.
@@ -62,11 +50,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // registerRoutes sets up the API routes.
-// Rate limit is applied only to POST (issuance) — 1 req/s burst 3.
 func (h *Handler) registerRoutes() {
-	issueRL := PerIPRateLimit(1, 3, h.done)
 	h.mux.Handle("POST /certs/{ip}",
-		issueRL(GzipResponse(http.HandlerFunc(h.handleIssueCert))))
+		GzipResponse(http.HandlerFunc(h.handleIssueCert)))
 	h.mux.Handle("GET /certs/{ip}",
 		GzipResponse(http.HandlerFunc(h.handleGetCert)))
 	h.mux.Handle("GET /certs/{ip}/ttl",
