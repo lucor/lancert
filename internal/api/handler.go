@@ -55,8 +55,7 @@ func (h *Handler) registerRoutes() {
 		GzipResponse(http.HandlerFunc(h.handleIssueCert)))
 	h.mux.Handle("GET /certs/{ip}",
 		GzipResponse(http.HandlerFunc(h.handleGetCert)))
-	h.mux.Handle("GET /certs/{ip}/ttl",
-		GzipResponse(http.HandlerFunc(h.handleGetTTL)))
+	h.mux.HandleFunc("GET /certs/{ip}/ttl", h.handleGetTTL)
 	// PEM downloads skip GzipResponse: files are small (~2-3KB) and
 	// compressing secret material adds unnecessary risk.
 	h.mux.HandleFunc("GET /certs/{ip}/fullchain.pem", h.handleGetFullChain)
@@ -146,7 +145,7 @@ func (h *Handler) handleGetCert(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotFound, "no certificate found for this IP")
 }
 
-// handleGetTTL returns the remaining TTL for the certificate.
+// handleGetTTL returns the remaining TTL in seconds as plain text.
 func (h *Handler) handleGetTTL(w http.ResponseWriter, r *http.Request) {
 	addr, err := privateip.ValidateRFC1918(r.PathValue("ip"))
 	if err != nil {
@@ -160,11 +159,8 @@ func (h *Handler) handleGetTTL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ip":          addr.String(),
-		"ttl_seconds": int(ttl.Seconds()),
-		"ttl_human":   formatDuration(ttl),
-	})
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	fmt.Fprint(w, int(ttl.Seconds()))
 }
 
 const (

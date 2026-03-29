@@ -136,6 +136,16 @@ func TestGetTTL_NotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
 
+func TestGetTTL_InvalidIP(t *testing.T) {
+	h := newTestHandler(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/certs/8.8.8.8/ttl", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
 func TestWriteError_RetryAfterOn5xx(t *testing.T) {
 	rec := httptest.NewRecorder()
 	writeError(rec, http.StatusInternalServerError, "something broke")

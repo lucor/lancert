@@ -68,18 +68,9 @@ components:
           examples: [10]
 
     TTL:
-      type: object
-      required: [ip, ttl_seconds, ttl_human]
-      properties:
-        ip:
-          type: string
-          examples: ["192.168.1.50"]
-        ttl_seconds:
-          type: integer
-          description: Remaining certificate validity in seconds.
-        ttl_human:
-          type: string
-          description: Human-readable remaining validity (e.g. "89d 23h").
+      type: integer
+      description: Remaining certificate validity in seconds.
+      examples: [7776000]
 
     Stats:
       type: object
@@ -278,9 +269,9 @@ paths:
       description: Returns the remaining validity period of the certificate.
       responses:
         "200":
-          description: TTL information.
+          description: Remaining TTL in seconds as plain text.
           content:
-            application/json:
+            text/plain:
               schema:
                 $ref: "#/components/schemas/TTL"
         "400":
