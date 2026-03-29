@@ -4,6 +4,10 @@ Real Let's Encrypt wildcard TLS certificates for private RFC 1918 IPs, designed 
 
 Solves the problem of needing valid HTTPS certificates for `*.192-168-1-50.lancert.dev` pointing at `192.168.1.50` on your LAN — needed for service workers, push notifications on mobile, and other APIs that require a secure context.
 
+<p align="center">
+  <img src="demo/demo.gif" alt="lancert demo — download certs and serve HTTPS with Caddy" width="800">
+</p>
+
 ## Architecture
 
 Single-process service with three components:

@@ -1,0 +1,4 @@
+192-168-0-9.lancert.dev, *.192-168-0-9.lancert.dev {
+    tls fullchain.pem privkey.pem
+    respond "Hello from {http.request.host} 🔒"
+}
