@@ -193,6 +193,17 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Pending"
+    CertificateReadRateLimited:
+      description: Certificate read rate limit exceeded. Retry after 10 seconds.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            examples: [10]
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
 
 paths:
   /certs/{ip}:
@@ -237,7 +248,8 @@ paths:
       summary: Get certificate status
       description: |
         Returns the certificate for the given IP if available, or the current
-        issuance status (pending / failed / not found).
+        issuance status (pending / failed / not found). Rate limited to one
+        request every 10 seconds with a burst of 3 per source IP.
       responses:
         "200":
           description: Certificate is available.
@@ -249,6 +261,8 @@ paths:
           $ref: "#/components/responses/Pending"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/CertificateReadRateLimited"
         "404":
           $ref: "#/components/responses/NotFound"
         "500":
@@ -266,7 +280,9 @@ paths:
 
     get:
       summary: Get certificate TTL
-      description: Returns the remaining validity period of the certificate.
+      description: |
+        Returns the remaining validity period of the certificate. Rate limited
+        to one request every 10 seconds with a shared burst of 3 per source IP.
       responses:
         "200":
           description: Remaining TTL in seconds as plain text.
@@ -276,6 +292,8 @@ paths:
                 $ref: "#/components/schemas/TTL"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/CertificateReadRateLimited"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -287,7 +305,8 @@ paths:
       summary: Download certificate chain
       description: |
         Returns the PEM-encoded certificate chain as a file download.
-        The filename includes the IP for disambiguation.
+        The filename includes the IP for disambiguation. Rate limited to one
+        request every 10 seconds with a shared burst of 3 per source IP.
       responses:
         "200":
           description: PEM certificate chain.
@@ -304,6 +323,8 @@ paths:
           $ref: "#/components/responses/Pending"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/CertificateReadRateLimited"
         "404":
           $ref: "#/components/responses/NotFound"
         "500":
@@ -317,7 +338,8 @@ paths:
       summary: Download private key
       description: |
         Returns the PEM-encoded private key as a file download.
-        The filename includes the IP for disambiguation.
+        The filename includes the IP for disambiguation. Rate limited to one
+        request every 10 seconds with a shared burst of 3 per source IP.
       responses:
         "200":
           description: PEM private key.
@@ -335,6 +357,8 @@ paths:
           $ref: "#/components/responses/Pending"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/CertificateReadRateLimited"
         "404":
           $ref: "#/components/responses/NotFound"
         "500":

@@ -27,8 +27,8 @@ import (
 var commitHash = "dev"
 
 const (
-	defaultZone       = "lancert.dev."
-	defaultDataDir    = "data"
+	defaultZone     = "lancert.dev."
+	defaultDataDir  = "data"
 	defaultDNSAddr  = ":53"
 	defaultHTTPAddr = ":8443"
 )
@@ -52,7 +52,7 @@ func run() error {
 		email    string
 		serverIP string
 		staging  bool
-		pregen bool
+		pregen   bool
 	)
 
 	flag.StringVar(&dnsAddr, "dns-addr", envOr("LANCERT_DNS_ADDR", defaultDNSAddr), "DNS listen address")
@@ -149,7 +149,8 @@ func run() error {
 
 	realIP := api.NewRealIP(proxySubnet)
 	ipHasher := api.NewIPHasher(ipHashSecret)
-	rateLimiter := api.NewRateLimiter(ctx, api.IssuanceRPS, api.IssuanceBurst)
+	issuanceLimiter := api.NewRateLimiter(ctx, api.IssuanceRPS, api.IssuanceBurst)
+	certificateReadLimiter := api.NewRateLimiter(ctx, api.CertificateReadRPS, api.CertificateReadBurst)
 
 	// HTTP API with middleware stack
 	apiHandler := api.New(certSvc)
@@ -158,7 +159,8 @@ func run() error {
 		api.SecurityHeaders,
 		realIP.Middleware,
 		ipHasher.Middleware,
-		rateLimiter.Middleware,
+		issuanceLimiter.Middleware,
+		certificateReadLimiter.CertificateReadMiddleware,
 		api.RequestLogging,
 	)
 

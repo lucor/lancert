@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +21,14 @@ const (
 	// 3 lets a client quickly issue certs for a small cluster of IPs
 	// (e.g. 10.0.0.1-3) without waiting between each request.
 	IssuanceBurst = 3
+
+	// CertificateReadRPS permits the documented 10-second polling interval
+	// while preventing a single client from repeatedly downloading certificate
+	// material. The shared burst allows an initial status check plus the two
+	// PEM downloads without delay.
+	CertificateReadRPS rate.Limit = 0.1
+
+	CertificateReadBurst = 3
 )
 
 // RateLimiter tracks per-key request rates using token buckets.
@@ -130,6 +139,34 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 		if !rl.Allow(ip) {
 			w.Header().Set("Retry-After", "1")
 			writeError(w, http.StatusTooManyRequests, "rate limit exceeded, try again later")
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// CertificateReadMiddleware limits GET requests below /certs/. It shares one
+// bucket across status, TTL, and PEM endpoints for each hashed client IP so a
+// caller cannot bypass the limit by alternating endpoint paths.
+// Requires the IPHasher middleware to run first.
+func (rl *RateLimiter) CertificateReadMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || !strings.HasPrefix(r.URL.Path, "/certs/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		ip, ok := HashedIPFromContext(r.Context())
+		if !ok {
+			slog.Error("certificate read limiter: missing hashed IP in context")
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+
+		if !rl.Allow(ip) {
+			w.Header().Set("Retry-After", "10")
+			writeError(w, http.StatusTooManyRequests, "certificate read rate limit exceeded, try again later")
 			return
 		}
 
