@@ -168,7 +168,7 @@
       <section aria-labelledby="coverage-heading">
         <div class="section-heading">
           <h2 id="coverage-heading">Certificate coverage</h2>
-          <p>Local addresses seen in the last 30 days and how many have a certificate ready to use.</p>
+          <p>Recent local address activity and certificates currently available from cache.</p>
         </div>
         <div class="cards">
           <article class="card">
@@ -184,8 +184,8 @@
           <article class="card">
             <div class="card-label">Certificates ready</div>
             <div class="value">{{.Readiness}}</div>
-            <p class="context">Ready now, with more than 30 days left</p>
-            {{if and .Snapshot.Readiness.Available .Snapshot.Readiness.Active}}<progress value="{{.Snapshot.Readiness.Ready}}" max="{{.Snapshot.Readiness.Active}}" aria-label="Certificates ready"></progress>{{end}}
+            <p class="context">Cached and ready to serve without contacting Let’s Encrypt</p>
+            {{if and .Snapshot.Readiness.Available .Snapshot.Readiness.Total}}<progress value="{{.Snapshot.Readiness.Ready}}" max="{{.Snapshot.Readiness.Total}}" aria-label="Certificates ready"></progress>{{end}}
           </article>
         </div>
       </section>

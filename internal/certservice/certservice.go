@@ -19,7 +19,7 @@
 //
 // There is no background renewal loop. Renewal is lazy: GetOrIssue checks the
 // stored certificate on every call and re-issues if less than 30 days remain
-// (renewThreshold). The renewal code path is identical to first-time issuance —
+// (RenewalWindow). The renewal code path is identical to first-time issuance —
 // a new ACME order is placed and a new keypair is generated. GetOrIssue is
 // used internally by backgroundIssue and Pregen; it is not called directly
 // by HTTP handlers.
@@ -108,8 +108,9 @@ import (
 )
 
 const (
-	// renewThreshold triggers renewal when cert has less than this remaining.
-	renewThreshold = 30 * 24 * time.Hour
+	// RenewalWindow triggers renewal when a certificate has less than this
+	// remaining. Certificates inside this window are not served from cache.
+	RenewalWindow = 30 * 24 * time.Hour
 
 	// budgetWindow is the rolling window for the issuance budget.
 	// Let's Encrypt allows ~50 new certs per registered domain per week.
@@ -210,7 +211,7 @@ func (s *Service) GetOrIssue(ctx context.Context, addr netip.Addr) (*certstore.C
 	if err != nil {
 		return nil, fmt.Errorf("load cert: %w", err)
 	}
-	if bundle != nil && time.Until(bundle.Meta.NotAfter) > renewThreshold {
+	if bundle != nil && time.Until(bundle.Meta.NotAfter) > RenewalWindow {
 		slog.Debug("certservice: cache hit", "addr", addr, "expires", bundle.Meta.NotAfter.Format(time.DateOnly))
 		return bundle, nil
 	}
@@ -233,7 +234,7 @@ func (s *Service) issue(ctx context.Context, addr netip.Addr) (*certstore.CertBu
 	if err != nil {
 		return nil, fmt.Errorf("load cert: %w", err)
 	}
-	if bundle != nil && time.Until(bundle.Meta.NotAfter) > renewThreshold {
+	if bundle != nil && time.Until(bundle.Meta.NotAfter) > RenewalWindow {
 		slog.Debug("certservice: cache hit after dedup", "addr", addr)
 		return bundle, nil
 	}
@@ -276,14 +277,14 @@ func (s *Service) TTL(addr netip.Addr) time.Duration {
 }
 
 // LoadUsable returns the stored certificate only if it is usable
-// (i.e. has more than renewThreshold remaining). Returns nil, nil
+// (i.e. has more than RenewalWindow remaining). Returns nil, nil
 // if no certificate exists or it needs renewal.
 func (s *Service) LoadUsable(addr netip.Addr) (*certstore.CertBundle, error) {
 	bundle, err := s.store.Load(addr)
 	if err != nil {
 		return nil, fmt.Errorf("load cert: %w", err)
 	}
-	if bundle != nil && time.Until(bundle.Meta.NotAfter) > renewThreshold {
+	if bundle != nil && time.Until(bundle.Meta.NotAfter) > RenewalWindow {
 		return bundle, nil
 	}
 	return nil, nil

@@ -172,38 +172,12 @@ func run() error {
 		if metricStore == nil {
 			return
 		}
-		snapshot := metricStore.Snapshot()
 		entries, err := store.Inventory()
 		if err != nil {
 			metricStore.SetReadiness(metrics.Readiness{Available: false, Degraded: true, Error: err.Error()})
 			return
 		}
-		byIP := make(map[netip.Addr]certstore.InventoryEntry, len(entries))
-		for _, entry := range entries {
-			if entry.Addr.IsValid() {
-				byIP[entry.Addr] = entry
-			}
-		}
-		var ready uint64
-		degraded := false
-		var firstErr string
-		for _, addr := range snapshot.ActiveTargets {
-			entry, ok := byIP[addr]
-			if !ok {
-				continue
-			}
-			if entry.Err != nil {
-				degraded = true
-				if firstErr == "" {
-					firstErr = fmt.Sprintf("certificate bundle %s: %v", addr, entry.Err)
-				}
-				continue
-			}
-			if entry.Ready && time.Until(entry.Meta.NotAfter) > 30*24*time.Hour {
-				ready++
-			}
-		}
-		metricStore.SetReadiness(metrics.Readiness{Active: snapshot.ActiveTargets30D, Ready: ready, Available: snapshot.TrackingComplete, Degraded: degraded, Error: firstErr})
+		metricStore.SetReadiness(readinessFromInventory(entries, time.Now()))
 	}
 
 	realIP := api.NewRealIP(proxySubnet)
@@ -310,6 +284,26 @@ func run() error {
 
 	slog.Info("shutdown complete")
 	return nil
+}
+
+func readinessFromInventory(entries []certstore.InventoryEntry, now time.Time) metrics.Readiness {
+	readiness := metrics.Readiness{Available: true}
+	for _, entry := range entries {
+		if entry.Addr.IsValid() {
+			readiness.Total++
+		}
+		if entry.Err != nil {
+			readiness.Degraded = true
+			if readiness.Error == "" {
+				readiness.Error = fmt.Sprintf("certificate bundle %s: %v", entry.Name, entry.Err)
+			}
+			continue
+		}
+		if entry.Ready && entry.Meta.NotAfter.Sub(now) > certservice.RenewalWindow {
+			readiness.Ready++
+		}
+	}
+	return readiness
 }
 
 // envOr returns the value of the environment variable key, or fallback if unset/empty.

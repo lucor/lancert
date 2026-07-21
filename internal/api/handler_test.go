@@ -51,7 +51,7 @@ func TestStatus(t *testing.T) {
 	store := certstore.New(t.TempDir())
 	svc := certservice.New(certservice.Config{Zone: "lancert.dev", Staging: true}, store, dnssrv.NewTXTStore())
 	h := New(svc, func() metrics.Snapshot {
-		return metrics.Snapshot{Queries24H: 12, WriteAttempts24H: 10, WriteSuccesses24H: 9, RecentQPS: 2.5, RecentWindow: time.Minute, RecentP95: 2 * time.Millisecond, TrackingComplete: true, ActiveTargets30D: 3, ActivePrefixes30D: 2, Readiness: metrics.Readiness{Available: true, Active: 3, Ready: 2}}
+		return metrics.Snapshot{Queries24H: 12, WriteAttempts24H: 10, WriteSuccesses24H: 9, RecentQPS: 2.5, RecentWindow: time.Minute, RecentP95: 2 * time.Millisecond, TrackingComplete: true, ActiveTargets30D: 3, ActivePrefixes30D: 2, Readiness: metrics.Readiness{Available: true, Total: 3, Ready: 2}}
 	})
 	req := httptest.NewRequest(http.MethodGet, "/status", nil)
 	rec := httptest.NewRecorder()

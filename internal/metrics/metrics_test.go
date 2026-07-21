@@ -68,7 +68,6 @@ INSERT INTO kpi_daily VALUES('2026-07-01',1,1,0)`)
 	require.NoError(t, s.RebuildSnapshot(context.Background()))
 	snap := s.Snapshot()
 	require.False(t, snap.TrackingComplete)
-	require.Nil(t, snap.ActiveTargets)
 	require.Zero(t, snap.ActiveTargets30D)
 	require.NoError(t, s.Close(context.Background()))
 }

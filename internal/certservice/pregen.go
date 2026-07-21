@@ -16,7 +16,7 @@ var PregenIPs = []netip.Addr{
 	netip.MustParseAddr("192.168.1.1"),
 	netip.MustParseAddr("10.0.0.1"),
 	netip.MustParseAddr("10.0.1.1"),
-	netip.MustParseAddr("172.17.0.1"),   // Docker default bridge
+	netip.MustParseAddr("172.17.0.1"), // Docker default bridge
 	netip.MustParseAddr("192.168.0.254"),
 	netip.MustParseAddr("192.168.1.254"),
 	netip.MustParseAddr("192.168.50.1"),
@@ -72,7 +72,7 @@ func (s *Service) Pregen(ctx context.Context) {
 			continue
 		}
 
-		if bundle != nil && time.Until(bundle.Meta.NotAfter) > renewThreshold {
+		if bundle != nil && time.Until(bundle.Meta.NotAfter) > RenewalWindow {
 			skipped++
 			continue
 		}

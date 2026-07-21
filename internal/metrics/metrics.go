@@ -47,11 +47,11 @@ type Breakdown struct {
 	Queries uint64
 }
 
-// Readiness is the current certificate readiness result for active DNS targets.
-// It is kept separate from historical DNS aggregates because the certificate
-// store is mutable and is rescanned periodically.
+// Readiness is the current certificate cache readiness result. It is kept
+// separate from historical DNS aggregates because the certificate store is
+// mutable and is rescanned periodically.
 type Readiness struct {
-	Active    uint64
+	Total     uint64
 	Ready     uint64
 	Available bool
 	Degraded  bool
@@ -84,9 +84,6 @@ type Snapshot struct {
 	LastFlushAt        time.Time
 	LastFlushError     string
 	Readiness          Readiness
-	// ActiveTargets is for in-process readiness correlation; API layers should
-	// expose only aggregate values, not this list.
-	ActiveTargets []netip.Addr
 }
 
 // Option configures a Store.
@@ -599,7 +596,6 @@ func populateTargets(out *Snapshot, all []targetQuery) {
 	blocks, prefixes, targets := make(map[string]uint64), make(map[string]uint64), make(map[string]uint64)
 	for _, item := range all {
 		addr := uint32Addr(item.ip)
-		out.ActiveTargets = append(out.ActiveTargets, addr)
 		targets[addr.String()] += item.q
 		prefixes[netip.PrefixFrom(addr, 24).Masked().String()] += item.q
 		switch {
@@ -611,7 +607,6 @@ func populateTargets(out *Snapshot, all []targetQuery) {
 			blocks["192.168.0.0/16"] += item.q
 		}
 	}
-	sort.Slice(out.ActiveTargets, func(i, j int) bool { return out.ActiveTargets[i].Less(out.ActiveTargets[j]) })
 	out.ActiveTargets30D = uint64(len(all))
 	out.ActivePrefixes30D = uint64(len(prefixes))
 	out.TopBlocks, out.OtherBlockQueries = top20(blocks)
@@ -657,7 +652,6 @@ func (s *Store) Snapshot() Snapshot {
 	r.TopBlocks = append([]Breakdown(nil), r.TopBlocks...)
 	r.TopPrefixes = append([]Breakdown(nil), r.TopPrefixes...)
 	r.TopTargets = append([]Breakdown(nil), r.TopTargets...)
-	r.ActiveTargets = append([]netip.Addr(nil), r.ActiveTargets...)
 	return r
 }
 

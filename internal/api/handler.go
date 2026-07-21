@@ -305,9 +305,9 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 		data.SuccessPercent = fmt.Sprintf("%.1f%%", float64(s.WriteSuccesses24H)*100/float64(s.WriteAttempts24H))
 	}
 	if s.Readiness.Available {
-		data.Readiness = "No active addresses"
-		if s.Readiness.Active > 0 {
-			data.Readiness = fmt.Sprintf("%d of %d · %.1f%%", s.Readiness.Ready, s.Readiness.Active, float64(s.Readiness.Ready)*100/float64(s.Readiness.Active))
+		data.Readiness = "No cached certificates"
+		if s.Readiness.Total > 0 {
+			data.Readiness = fmt.Sprintf("%d of %d · %.1f%%", s.Readiness.Ready, s.Readiness.Total, float64(s.Readiness.Ready)*100/float64(s.Readiness.Total))
 		}
 	}
 	if s.RecentWindow > 0 {
