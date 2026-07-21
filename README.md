@@ -72,6 +72,22 @@ go build -o lancert ./cmd/lancert/
 | `-staging` | `false` | Use Let's Encrypt staging |
 | `-pregen` | `false` | Pre-generate certificates for common IPs at startup |
 
+### Local development with mise
+
+The repository includes a safe local-development profile pinned to Go 1.26.5.
+The `dev` task uses Air for automatic rebuilds when source files change:
+
+```bash
+mise install
+mise run setup
+mise run dev
+```
+
+The dev task uses `./data` for local data and writes binaries to `./bin`.
+It binds DNS to `127.0.0.1:1053`,
+uses HTTP on `127.0.0.1:8443`, and always targets the Let's Encrypt staging
+environment. Production settings must be provided separately.
+
 ## Supported IPs
 
 Only RFC 1918 private IPv4 addresses:

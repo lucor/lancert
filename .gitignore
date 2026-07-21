@@ -5,3 +5,4 @@ data/
 certs/
 .env
 .DS_Store
+bin/

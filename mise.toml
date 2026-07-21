@@ -1,0 +1,57 @@
+[tools]
+go = "1.26.5"
+"go:github.com/air-verse/air" = "latest"
+
+[env]
+# Safe local-development defaults. Production must provide its own environment.
+LANCERT_DATA_DIR = "./data"
+LANCERT_DNS_ADDR = "127.0.0.1:1053"
+LANCERT_HTTP_ADDR = "127.0.0.1:8443"
+LANCERT_IP_HASH_SALT = "lancert-mise-dev-only"
+LANCERT_SERVER_IP = "127.0.0.1"
+LANCERT_STAGING = "true"
+LANCERT_PREGEN = "false"
+
+[tasks.setup]
+description = "Install Go dependencies and prepare local data"
+run = [
+  "mkdir -p ./data ./bin",
+  "go mod download",
+]
+
+[tasks.dev]
+description = "Run lancert with hot reload and staging-only local settings"
+run = [
+  "mkdir -p ./data ./bin",
+  "air -c .air.toml",
+]
+
+[tasks.fmt]
+description = "Format Go source files"
+run = "go fmt ./..."
+
+[tasks.test]
+description = "Run all tests"
+run = "go test ./..."
+
+[tasks.race]
+description = "Run all tests with the race detector"
+run = "go test -race ./..."
+
+[tasks.lint]
+description = "Run the Go static checks"
+run = "go vet ./..."
+
+[tasks.check]
+description = "Run the standard local checks"
+run = [
+  "go vet ./...",
+  "go test ./...",
+]
+
+[tasks.build]
+description = "Build a static lancert binary"
+run = [
+  "mkdir -p ./bin",
+  "CGO_ENABLED=0 go build -o ./bin/lancert ./cmd/lancert",
+]

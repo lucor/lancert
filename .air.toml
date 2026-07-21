@@ -1,0 +1,20 @@
+root = "."
+tmp_dir = "./bin/.air"
+
+[build]
+cmd = "go build -o ./bin/lancert ./cmd/lancert"
+bin = "./bin/lancert"
+full_bin = "./bin/lancert"
+include_ext = ["go", "tpl", "tmpl", "html"]
+exclude_dir = ["bin", "certs", "data", "static"]
+delay = 1000
+stop_on_error = true
+send_interrupt = true
+kill_delay = 500
+
+[log]
+time = true
+
+[screen]
+clear_on_rebuild = true
+keep_scroll = true
