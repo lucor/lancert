@@ -1,10 +1,13 @@
 package api
 
 import (
-	_ "embed"
+	"embed"
 	"encoding/json"
 	"fmt"
+	"html/template"
+	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/netip"
 	"strconv"
@@ -13,6 +16,7 @@ import (
 
 	"lucor.dev/lancert/internal/certservice"
 	"lucor.dev/lancert/internal/certstore"
+	"lucor.dev/lancert/internal/metrics"
 	"lucor.dev/lancert/internal/privateip"
 )
 
@@ -25,19 +29,57 @@ var notFoundHTML []byte
 //go:embed static/docs.html
 var docsHTML []byte
 
+//go:embed static/status.html
+var statusHTML string
+
 //go:embed openapi.yaml
 var openapiYAML []byte
 
-// Handler serves the lancert.dev HTTP API.
-type Handler struct {
-	service *certservice.Service
-	mux     *http.ServeMux
+//go:embed static/assets
+var assetsFS embed.FS
+
+var assetsHandler http.Handler
+
+func init() {
+	sub, err := fs.Sub(assetsFS, "static/assets")
+	if err != nil {
+		panic("assets: " + err.Error())
+	}
+	assetsHandler = http.StripPrefix("/assets", http.FileServer(http.FS(sub)))
 }
 
-// New creates an API handler wired to the given cert service.
-func New(svc *certservice.Service) *Handler {
+func serveAssets(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/assets/" {
+		http.NotFound(w, r)
+		return
+	}
+	assetsHandler.ServeHTTP(w, r)
+}
+
+var statusTemplate = template.Must(template.New("status").Parse(statusHTML))
+var indexTemplate = template.Must(template.New("index").Parse(string(indexHTML)))
+
+type indexData struct {
+	Analytics bool
+}
+
+// Handler serves the lancert.dev HTTP API.
+type Handler struct {
+	service  *certservice.Service
+	mux      *http.ServeMux
+	snapshot func() metrics.Snapshot
+}
+
+// New creates an API handler wired to the certificate service and status
+// snapshot provider.
+func New(svc *certservice.Service, snapshot func() metrics.Snapshot) *Handler {
+	provider := func() metrics.Snapshot { return metrics.UnavailableSnapshot(nil) }
+	if snapshot != nil {
+		provider = snapshot
+	}
 	h := &Handler{
-		service: svc,
+		service:  svc,
+		snapshot: provider,
 	}
 	h.mux = http.NewServeMux()
 	h.registerRoutes()
@@ -60,11 +102,12 @@ func (h *Handler) registerRoutes() {
 	// compressing secret material adds unnecessary risk.
 	h.mux.HandleFunc("GET /certs/{ip}/fullchain.pem", h.handleGetFullChain)
 	h.mux.HandleFunc("GET /certs/{ip}/privkey.pem", h.handleGetPrivKey)
-	h.mux.HandleFunc("GET /stats", h.handleStats)
+	h.mux.HandleFunc("GET /status", h.handleStatus)
 	h.mux.HandleFunc("GET /health", h.handleHealth)
 	h.mux.HandleFunc("GET /docs", handleDocs)
 	h.mux.HandleFunc("GET /openapi.yaml", handleOpenAPI)
 	h.mux.HandleFunc("GET /{$}", handleIndex)
+	h.mux.HandleFunc("GET /assets/", serveAssets)
 	h.mux.HandleFunc("GET /", handleNotFound)
 }
 
@@ -234,19 +277,54 @@ func (h *Handler) servePEM(w http.ResponseWriter, r *http.Request, kind string) 
 	writeError(w, http.StatusNotFound, "no certificate found for this IP")
 }
 
-// handleStats returns public stats.
-func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
-	st := h.service.Stats()
-	writeJSON(w, http.StatusOK, map[string]any{
-		"cert_count":        st.CertCount,
-		"total_issued":      st.TotalIssued,
-		"budget_used":       st.BudgetUsed,
-		"budget_limit":      st.BudgetLimit,
-		"budget_resets_in":  formatDuration(st.BudgetResetsIn),
-		"pending_issuances": st.PendingIssuances,
-		"failed_issuances":  st.FailedIssuances,
-		"uptime":            formatDuration(st.Uptime),
-	})
+type statusPageData struct {
+	metrics.Snapshot
+	SuccessPercent string
+	Readiness      string
+	RecentQPS      string
+	RecentP95      string
+	Window         string
+	LastUpdated    string
+}
+
+func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
+	s := h.snapshot()
+	data := statusPageData{
+		Snapshot:       s,
+		SuccessPercent: "Not available",
+		Readiness:      "Not available",
+		RecentQPS:      "Not available",
+		RecentP95:      "Not available",
+		Window:         "startup",
+		LastUpdated:    "Not available",
+	}
+	if !s.FreshAt.IsZero() {
+		data.LastUpdated = s.FreshAt.Format("2 Jan 2006, 15:04 UTC")
+	}
+	if s.WriteAttempts24H > 0 {
+		data.SuccessPercent = fmt.Sprintf("%.1f%%", float64(s.WriteSuccesses24H)*100/float64(s.WriteAttempts24H))
+	}
+	if s.Readiness.Available {
+		data.Readiness = "No active addresses"
+		if s.Readiness.Active > 0 {
+			data.Readiness = fmt.Sprintf("%d of %d · %.1f%%", s.Readiness.Ready, s.Readiness.Active, float64(s.Readiness.Ready)*100/float64(s.Readiness.Active))
+		}
+	}
+	if s.RecentWindow > 0 {
+		data.RecentQPS = fmt.Sprintf("%.2f", s.RecentQPS)
+		data.Window = s.RecentWindow.Round(time.Second).String()
+	}
+	if s.RecentP95 > 0 {
+		data.RecentP95 = s.RecentP95.String()
+		if s.RecentP95Overflow {
+			data.RecentP95 = ">" + data.RecentP95
+		}
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=60, stale-while-revalidate=30")
+	if err := statusTemplate.Execute(w, data); err != nil {
+		slog.Error("status page: render failed", "error", err)
+	}
 }
 
 // handleHealth is a simple liveness probe.
@@ -257,7 +335,20 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 // handleIndex serves the static homepage.
 func handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(indexHTML)
+	w.Header().Set("Vary", "Host")
+	data := indexData{Analytics: analyticsHost(r.Host)}
+	if err := indexTemplate.Execute(w, data); err != nil {
+		slog.Error("index page: render failed", "error", err)
+	}
+}
+
+func analyticsHost(hostport string) bool {
+	host := hostport
+	if parsed, _, err := net.SplitHostPort(hostport); err == nil {
+		host = parsed
+	}
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	return host == "lancert.dev"
 }
 
 // handleDocs serves the Scalar API reference page.
@@ -326,27 +417,3 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	}
 	writeJSON(w, status, map[string]string{"error": message})
 }
-
-// formatDuration formats a duration as "Xd Yh Zm".
-func formatDuration(d time.Duration) string {
-	days := int(d.Hours()) / 24
-	hours := int(d.Hours()) % 24
-	minutes := int(d.Minutes()) % 60
-
-	if days > 0 {
-		return strings.TrimSpace(
-			strings.Join([]string{
-				strconv.Itoa(days) + "d",
-				strconv.Itoa(hours) + "h",
-			}, " "),
-		)
-	}
-
-	return strings.TrimSpace(
-		strings.Join([]string{
-			strconv.Itoa(hours) + "h",
-			strconv.Itoa(minutes) + "m",
-		}, " "),
-	)
-}
-

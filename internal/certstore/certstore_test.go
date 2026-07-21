@@ -9,6 +9,9 @@ import (
 	"encoding/pem"
 	"math/big"
 	"net/netip"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,4 +106,76 @@ func TestStore_Count(t *testing.T) {
 
 	require.NoError(t, store.Save(addr2, privKey, [][]byte{certDER}))
 	assert.Equal(t, 2, store.Count())
+}
+
+func TestStore_Inventory(t *testing.T) {
+	baseDir := t.TempDir()
+	store := New(baseDir)
+	privKey, certDER := generateTestCert(t, []string{"test.lancert.dev"})
+	require.NoError(t, store.Save(netip.MustParseAddr("192.168.1.2"), privKey, [][]byte{certDER}))
+	require.NoError(t, store.Save(netip.MustParseAddr("10.0.0.10"), privKey, [][]byte{certDER}))
+
+	// Foreign files are ignored, while malformed directories remain visible.
+	require.NoError(t, os.WriteFile(filepath.Join(baseDir, "README"), []byte("foreign"), 0o600))
+	require.NoError(t, os.Mkdir(filepath.Join(baseDir, "not-a-certificate"), 0o700))
+
+	entries, err := store.Inventory()
+	require.NoError(t, err)
+	require.Len(t, entries, 3)
+	assert.Equal(t, "10.0.0.10", entries[0].Addr.String())
+	assert.Equal(t, "192.168.1.2", entries[1].Addr.String())
+	assert.True(t, entries[0].Ready)
+	assert.True(t, entries[1].Ready)
+	assert.NotEmpty(t, entries[0].Meta.Domains)
+	assert.Equal(t, "not-a-certificate", entries[2].Name)
+	assert.False(t, entries[2].Addr.IsValid())
+	assert.Error(t, entries[2].Err)
+}
+
+func TestStore_InventoryMissingStore(t *testing.T) {
+	entries, err := New(filepath.Join(t.TempDir(), "missing")).Inventory()
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+}
+
+func TestStore_InventoryCorruptBundles(t *testing.T) {
+	baseDir := t.TempDir()
+	writeBundle := func(name string, meta, key, chain []byte) {
+		t.Helper()
+		dir := filepath.Join(baseDir, name)
+		require.NoError(t, os.Mkdir(dir, 0o700))
+		if meta != nil {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, metaFile), meta, 0o600))
+		}
+		if key != nil {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, privkeyFile), key, 0o600))
+		}
+		if chain != nil {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, fullchainFile), chain, 0o600))
+		}
+	}
+	validMeta := []byte(`{"domains":["test.lancert.dev"],"issued_at":"2026-01-01T00:00:00Z","not_after":"2027-01-01T00:00:00Z"}`)
+	writeBundle("10-0-0-1", []byte("{"), []byte("key"), []byte("chain"))
+	writeBundle("10-0-0-2", validMeta, nil, []byte("chain"))
+	writeBundle("10-0-0-3", validMeta, []byte{}, []byte("chain"))
+	writeBundle("10-0-0-4", validMeta, []byte("key"), nil)
+	writeBundle("10-0-0-5", validMeta, []byte("key"), []byte{})
+
+	entries, err := New(baseDir).Inventory()
+	require.NoError(t, err)
+	require.Len(t, entries, 5)
+	wants := []string{"parse meta", "open privkey.pem", "privkey.pem: file is empty", "open fullchain.pem", "fullchain.pem: file is empty"}
+	for i, want := range wants {
+		assert.False(t, entries[i].Ready)
+		require.Error(t, entries[i].Err)
+		assert.True(t, strings.Contains(entries[i].Err.Error(), want), entries[i].Err.Error())
+	}
+}
+
+func TestStore_InventoryUnreadableBase(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "not-a-directory")
+	require.NoError(t, os.WriteFile(base, []byte("file"), 0o600))
+	entries, err := New(base).Inventory()
+	assert.Error(t, err)
+	assert.Nil(t, entries)
 }

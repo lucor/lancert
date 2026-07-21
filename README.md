@@ -1,8 +1,14 @@
 # lancert
 
-Real Let's Encrypt wildcard TLS certificates for private RFC 1918 IPs, designed for local development.
+<p align="center">
+  <img src="internal/api/static/assets/lancert-logo.svg" alt="lancert" width="320">
+</p>
 
-Solves the problem of needing valid HTTPS certificates for `*.192-168-1-50.lancert.dev` pointing at `192.168.1.50` on your LAN — needed for service workers, push notifications on mobile, and other APIs that require a secure context.
+Local HTTPS certificates for private IP addresses.
+
+Get browser-trusted Let’s Encrypt wildcard TLS certificates for private IP addresses on your LAN. Test local apps on real devices without a custom CA or certificate warnings.
+
+lancert maps names such as `*.192-168-1-50.lancert.dev` to `192.168.1.50`, which is useful for service workers, mobile push notifications, and other APIs that require a secure context.
 
 <p align="center">
   <img src="demo/demo.gif" alt="lancert demo — download certs and serve HTTPS with Caddy" width="800">
@@ -17,6 +23,12 @@ Single-process service with three components:
 2. **HTTP API** — `POST /certs/{ip}` to issue a certificate, `GET /certs/{ip}` to fetch it, `GET /certs/{ip}/fullchain.pem` and `GET /certs/{ip}/privkey.pem` for direct PEM downloads, `GET /certs/{ip}/ttl` for remaining validity.
 
 3. **Certificate service** — ACME DNS-01 flow via Let's Encrypt. Each IP gets one certificate covering both `192-168-1-50.lancert.dev` and `*.192-168-1-50.lancert.dev`.
+
+The public `GET /status` page reports aggregate DNS activity, serving stability,
+and current certificate readiness. It observes authoritative DNS queries, not
+users or unique installations. Metrics are buffered in memory and flushed to
+`metrics.db` periodically; metrics failures never stop DNS or certificate
+serving.
 
 ## Security
 

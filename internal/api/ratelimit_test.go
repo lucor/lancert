@@ -36,5 +36,5 @@ func TestCertificateReadMiddleware(t *testing.T) {
 	assert.Equal(t, "10", rec.Header().Get("Retry-After"))
 
 	assert.Equal(t, http.StatusNoContent, request(http.MethodPost, "/certs/192.168.1.50").Code)
-	assert.Equal(t, http.StatusNoContent, request(http.MethodGet, "/stats").Code)
+	assert.Equal(t, http.StatusNoContent, request(http.MethodGet, "/health").Code)
 }

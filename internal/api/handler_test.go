@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"lucor.dev/lancert/internal/certservice"
 	"lucor.dev/lancert/internal/certstore"
 	"lucor.dev/lancert/internal/dnssrv"
+	"lucor.dev/lancert/internal/metrics"
 )
 
 // newTestHandler creates a handler backed by a temp cert store.
@@ -28,7 +30,7 @@ func newTestHandler(t *testing.T) *Handler {
 		txtStore,
 	)
 
-	return New(svc)
+	return New(svc, nil)
 }
 
 func TestHealth(t *testing.T) {
@@ -45,25 +47,58 @@ func TestHealth(t *testing.T) {
 	assert.Equal(t, "ok", body["status"])
 }
 
-func TestStats(t *testing.T) {
-	h := newTestHandler(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/stats", nil)
+func TestStatus(t *testing.T) {
+	store := certstore.New(t.TempDir())
+	svc := certservice.New(certservice.Config{Zone: "lancert.dev", Staging: true}, store, dnssrv.NewTXTStore())
+	h := New(svc, func() metrics.Snapshot {
+		return metrics.Snapshot{Queries24H: 12, WriteAttempts24H: 10, WriteSuccesses24H: 9, RecentQPS: 2.5, RecentWindow: time.Minute, RecentP95: 2 * time.Millisecond, TrackingComplete: true, ActiveTargets30D: 3, ActivePrefixes30D: 2, Readiness: metrics.Readiness{Available: true, Active: 3, Ready: 2}}
+	})
+	req := httptest.NewRequest(http.MethodGet, "/status", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-
 	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "Certificate coverage")
+	assert.Contains(t, rec.Body.String(), "2 of 3 · 66.7%")
+}
 
-	var body map[string]any
-	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
-	assert.Equal(t, float64(0), body["cert_count"])
-	assert.Equal(t, float64(0), body["total_issued"])
-	assert.Equal(t, float64(0), body["budget_used"])
-	assert.Equal(t, float64(40), body["budget_limit"])
-	assert.Contains(t, body, "budget_resets_in")
-	assert.Equal(t, float64(0), body["pending_issuances"])
-	assert.Equal(t, float64(0), body["failed_issuances"])
-	assert.Contains(t, body, "uptime")
+func TestAssets(t *testing.T) {
+	h := newTestHandler(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/assets/lancert-logo.svg", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "image/svg+xml", rec.Header().Get("Content-Type"))
+
+	req = httptest.NewRequest(http.MethodGet, "/assets/", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestIndexAnalyticsOnlyOnCanonicalHost(t *testing.T) {
+	h := newTestHandler(t)
+
+	for _, test := range []struct {
+		host      string
+		analytics bool
+	}{
+		{host: "localhost:8080", analytics: false},
+		{host: "192.168.1.50", analytics: false},
+		{host: "preview.lancert.dev", analytics: false},
+		{host: "lancert.dev", analytics: true},
+		{host: "lancert.dev:443", analytics: true},
+	} {
+		t.Run(test.host, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Host = test.host
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			containsScript := strings.Contains(rec.Body.String(), "analytics.lucor.dev/script.js")
+			assert.Equal(t, test.analytics, containsScript)
+		})
+	}
 }
 
 func TestGetCert_NotFound(t *testing.T) {
@@ -154,21 +189,4 @@ func TestWriteError_RetryAfterOn5xx(t *testing.T) {
 	rec = httptest.NewRecorder()
 	writeError(rec, http.StatusBadRequest, "bad input")
 	assert.Empty(t, rec.Header().Get("Retry-After"))
-}
-
-func TestFormatDuration(t *testing.T) {
-	tests := []struct {
-		name string
-		d    time.Duration
-		want string
-	}{
-		{name: "days", d: 89*24*time.Hour + 12*time.Hour, want: "89d 12h"},
-		{name: "hours only", d: 5*time.Hour + 30*time.Minute, want: "5h 30m"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, formatDuration(tt.d))
-		})
-	}
 }

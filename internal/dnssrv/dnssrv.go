@@ -40,6 +40,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/miekg/dns"
 
@@ -74,6 +75,17 @@ type Config struct {
 
 	// CAAIssuers is the list of CAs allowed to issue certs (e.g. ["letsencrypt.org"]).
 	CAAIssuers []string
+
+	// Recorder receives bounded aggregate observations. It must not perform
+	// blocking I/O on the DNS handler path.
+	Recorder Recorder
+}
+
+// Recorder is implemented by the metrics collector. Keeping this interface
+// local avoids coupling the DNS package to a storage implementation.
+type Recorder interface {
+	RecordTarget(netip.Addr)
+	RecordResponse(bool, time.Duration)
 }
 
 // Server is an authoritative DNS server for the lancert.dev zone.
@@ -85,6 +97,7 @@ type Server struct {
 	mux      *dns.ServeMux
 	udp      *dns.Server
 	tcp      *dns.Server
+	recorder Recorder
 }
 
 // New creates a DNS server with the given config and TXT store.
@@ -92,6 +105,7 @@ func New(cfg Config, store *TXTStore) *Server {
 	s := &Server{
 		config:   cfg,
 		txtStore: store,
+		recorder: cfg.Recorder,
 	}
 
 	s.mux = dns.NewServeMux()
@@ -158,6 +172,7 @@ func (s *Server) Shutdown() error {
 
 // handleQuery is the miekg/dns handler for all queries in the zone.
 func (s *Server) handleQuery(w dns.ResponseWriter, r *dns.Msg) {
+	started := time.Now()
 	msg := new(dns.Msg)
 	msg.SetReply(r)
 	msg.Authoritative = true
@@ -179,7 +194,11 @@ func (s *Server) handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 		}
 	}
 
-	if err := w.WriteMsg(msg); err != nil {
+	err := w.WriteMsg(msg)
+	if s.recorder != nil {
+		s.recorder.RecordResponse(err == nil, time.Since(started))
+	}
+	if err != nil {
 		slog.Error("dns write error", "error", err)
 	}
 }
@@ -221,6 +240,9 @@ func (s *Server) handleA(msg *dns.Msg, q dns.Question) {
 	}
 
 	s.appendA(msg, q.Name, addr)
+	if s.recorder != nil {
+		s.recorder.RecordTarget(addr)
+	}
 }
 
 // handleTXT serves challenge records from the in-memory store.
@@ -353,4 +375,3 @@ func (s *Server) PacketConnAddr() net.Addr {
 	}
 	return s.udp.PacketConn.LocalAddr()
 }
-

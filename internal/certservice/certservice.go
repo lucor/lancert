@@ -161,18 +161,6 @@ type FailInfo struct {
 	Msg    string // error message
 }
 
-// Stats holds a point-in-time snapshot of service-level statistics.
-type Stats struct {
-	CertCount        int
-	TotalIssued      int64
-	BudgetUsed       int64
-	BudgetLimit      int64
-	BudgetResetsIn   time.Duration
-	PendingIssuances int
-	FailedIssuances  int
-	Uptime           time.Duration
-}
-
 // issuanceTimeout is the context timeout for background issuance goroutines.
 // ACME DNS-01 does 2 serial authorizations (bare + wildcard), each with up
 // to 5 minutes of propagation polling, plus finalization overhead.
@@ -180,12 +168,11 @@ const issuanceTimeout = 12 * time.Minute
 
 // Service orchestrates certificate issuance and caching.
 type Service struct {
-	config    Config
-	store     *certstore.Store
-	txtStore  dnssrv.TXTHandler
-	sfGroup   singleflight.Group // deduplicates concurrent issuance for the same IP
-	budget    *issuanceBudget
-	startedAt time.Time
+	config   Config
+	store    *certstore.Store
+	txtStore dnssrv.TXTHandler
+	sfGroup  singleflight.Group // deduplicates concurrent issuance for the same IP
+	budget   *issuanceBudget
 
 	mu     sync.Mutex
 	issues map[string]*issueRecord
@@ -207,12 +194,11 @@ func New(cfg Config, store *certstore.Store, txtStore dnssrv.TXTHandler) *Servic
 	}
 
 	return &Service{
-		config:    cfg,
-		store:     store,
-		txtStore:  txtStore,
-		budget:    budget,
-		startedAt: time.Now(),
-		issues:    make(map[string]*issueRecord),
+		config:   cfg,
+		store:    store,
+		txtStore: txtStore,
+		budget:   budget,
+		issues:   make(map[string]*issueRecord),
 	}
 }
 
@@ -287,41 +273,6 @@ func (s *Service) issue(ctx context.Context, addr netip.Addr) (*certstore.CertBu
 // TTL returns the remaining validity for the given IP.
 func (s *Service) TTL(addr netip.Addr) time.Duration {
 	return s.store.TTL(addr)
-}
-
-// CertCount returns the total number of stored certificates.
-func (s *Service) CertCount() int {
-	return s.store.Count()
-}
-
-// Stats returns a snapshot of service-level statistics. Budget and issue
-// counters are collected under their respective locks; the returned values
-// are a consistent point-in-time view per field group but not globally atomic.
-func (s *Service) Stats() Stats {
-	budgetUsed, budgetLimit, totalIssued, budgetResetsIn := s.budget.stats()
-
-	s.mu.Lock()
-	var pending, failed int
-	for _, rec := range s.issues {
-		switch {
-		case rec.pending:
-			pending++
-		case rec.fail != nil:
-			failed++
-		}
-	}
-	s.mu.Unlock()
-
-	return Stats{
-		CertCount:        s.store.Count(),
-		TotalIssued:      totalIssued,
-		BudgetUsed:       budgetUsed,
-		BudgetLimit:      budgetLimit,
-		BudgetResetsIn:   budgetResetsIn,
-		PendingIssuances: pending,
-		FailedIssuances:  failed,
-		Uptime:           time.Since(s.startedAt),
-	}
 }
 
 // LoadUsable returns the stored certificate only if it is usable
@@ -433,7 +384,7 @@ func (s *Service) backgroundIssue(addr netip.Addr, key string) {
 			fail: &failRecord{
 				err:    err,
 				status: classifyIssueError(err),
-				at:     time.Now(),
+				at:     time.Now().UTC(),
 			},
 		}
 		return
@@ -467,7 +418,6 @@ type issuanceBudget struct {
 	mu          sync.Mutex
 	limit       int64
 	count       int64
-	totalIssued int64
 	windowStart int64  // unix seconds
 	path        string // file path for persistence; empty = in-memory only
 }
@@ -476,7 +426,6 @@ type issuanceBudget struct {
 type budgetState struct {
 	Count       int64 `json:"count"`
 	WindowStart int64 `json:"window_start"`
-	TotalIssued int64 `json:"total_issued"`
 }
 
 // load restores the budget from disk. Errors are logged and ignored —
@@ -494,9 +443,6 @@ func (b *issuanceBudget) load() {
 		slog.Warn("budget: ignoring corrupt state file", "path", b.path, "error", err)
 		return
 	}
-	// Lifetime counter always survives restarts.
-	b.totalIssued = s.TotalIssued
-
 	// Only restore the rolling window if it has not expired.
 	if time.Now().Unix()-s.WindowStart <= int64(budgetWindow.Seconds()) {
 		b.count = s.Count
@@ -510,7 +456,7 @@ func (b *issuanceBudget) save() {
 	if b.path == "" {
 		return
 	}
-	data, _ := json.Marshal(budgetState{Count: b.count, WindowStart: b.windowStart, TotalIssued: b.totalIssued})
+	data, _ := json.Marshal(budgetState{Count: b.count, WindowStart: b.windowStart})
 	if err := os.WriteFile(b.path, data, 0o600); err != nil {
 		slog.Warn("budget: failed to persist state", "path", b.path, "error", err)
 	}
@@ -540,7 +486,6 @@ func (b *issuanceBudget) allow() bool {
 	if now-b.windowStart > int64(budgetWindow.Seconds()) {
 		b.windowStart = now
 		b.count = 1
-		b.totalIssued++
 		b.save()
 		return true
 	}
@@ -550,28 +495,8 @@ func (b *issuanceBudget) allow() bool {
 	}
 
 	b.count++
-	b.totalIssued++
 	b.save()
 	return true
-}
-
-// stats returns the current budget count, limit, time until reset, and
-// lifetime total under a single lock acquisition.
-func (b *issuanceBudget) stats() (used, limit, totalIssued int64, resetsIn time.Duration) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	now := time.Now().Unix()
-	if now-b.windowStart > int64(budgetWindow.Seconds()) {
-		return 0, b.limit, b.totalIssued, 0
-	}
-
-	end := time.Unix(b.windowStart, 0).Add(budgetWindow)
-	remaining := time.Until(end)
-	if remaining < 0 {
-		remaining = 0
-	}
-	return b.count, b.limit, b.totalIssued, remaining
 }
 
 // resetIn returns the duration until the current budget window resets.

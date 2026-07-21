@@ -3,6 +3,7 @@ package dnssrv
 import (
 	"context"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,11 +12,38 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type testRecorder struct {
+	mu        sync.Mutex
+	targets   []netip.Addr
+	responses int
+	successes int
+}
+
+func (r *testRecorder) RecordTarget(addr netip.Addr) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.targets = append(r.targets, addr)
+}
+func (r *testRecorder) RecordResponse(success bool, _ time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.responses++
+	if success {
+		r.successes++
+	}
+}
+
+func (r *testRecorder) snapshot() ([]netip.Addr, int, int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]netip.Addr(nil), r.targets...), r.responses, r.successes
+}
+
 const testZone = "lancert.dev."
 
 // startTestServer launches a DNS server on a random port and returns
 // the address and a cleanup function.
-func startTestServer(t *testing.T) (*Server, string) {
+func startTestServer(t *testing.T, recorders ...Recorder) (*Server, string) {
 	t.Helper()
 
 	store := NewTXTStore()
@@ -26,6 +54,9 @@ func startTestServer(t *testing.T) (*Server, string) {
 		SOAMname:   "ns1.lancert.dev.",
 		SOARname:   "admin.lancert.dev.",
 		CAAIssuers: []string{"letsencrypt.org"},
+	}
+	if len(recorders) > 0 {
+		cfg.Recorder = recorders[0]
 	}
 
 	srv := New(cfg, store)
@@ -75,6 +106,21 @@ func TestDNS_A_PrivateIP(t *testing.T) {
 	a, ok := r.Answer[0].(*dns.A)
 	require.True(t, ok)
 	assert.Equal(t, "192.168.1.50", a.A.String())
+}
+
+func TestDNS_RecorderTracksTargetQuestionsAndMessages(t *testing.T) {
+	recorder := &testRecorder{}
+	_, addr := startTestServer(t, recorder)
+
+	query(t, addr, "192-168-1-50.lancert.dev.", dns.TypeA)
+	query(t, addr, "8-8-8-8.lancert.dev.", dns.TypeA)
+	query(t, addr, "_acme-challenge.192-168-1-50.lancert.dev.", dns.TypeTXT)
+
+	targets, responses, successes := recorder.snapshot()
+	require.Len(t, targets, 1)
+	assert.Equal(t, "192.168.1.50", targets[0].String())
+	assert.Equal(t, 3, responses)
+	assert.Equal(t, 3, successes)
 }
 
 func TestDNS_A_Subdomain(t *testing.T) {

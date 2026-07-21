@@ -72,43 +72,6 @@ components:
       description: Remaining certificate validity in seconds.
       examples: [7776000]
 
-    Stats:
-      type: object
-      required:
-        - cert_count
-        - total_issued
-        - budget_used
-        - budget_limit
-        - budget_resets_in
-        - pending_issuances
-        - failed_issuances
-        - uptime
-      properties:
-        cert_count:
-          type: integer
-          description: Number of certificates currently stored.
-        total_issued:
-          type: integer
-          description: Total certificates issued since process start.
-        budget_used:
-          type: integer
-          description: Certificates issued in the current budget window.
-        budget_limit:
-          type: integer
-          description: Maximum certificates allowed per budget window.
-        budget_resets_in:
-          type: string
-          description: Time until the budget resets (e.g. "6d 12h").
-        pending_issuances:
-          type: integer
-          description: Issuances currently in progress.
-        failed_issuances:
-          type: integer
-          description: Issuances that failed in the current window.
-        uptime:
-          type: string
-          description: Process uptime (e.g. "2d 5h").
-
     Health:
       type: object
       required: [status]
@@ -364,18 +327,6 @@ paths:
         "500":
           $ref: "#/components/responses/ServerError"
 
-  /stats:
-    get:
-      summary: Service statistics
-      description: Returns public statistics about the service.
-      responses:
-        "200":
-          description: Current statistics.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Stats"
-
   /health:
     get:
       summary: Health check
@@ -387,3 +338,15 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Health"
+
+  /status:
+    get:
+      summary: Public DNS and certificate readiness status
+      description: Returns a cacheable HTML status page with aggregate DNS activity and current certificate readiness.
+      responses:
+        "200":
+          description: Public status page.
+          content:
+            text/html:
+              schema:
+                type: string

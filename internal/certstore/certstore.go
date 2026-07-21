@@ -34,10 +34,12 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"lucor.dev/lancert/internal/privateip"
@@ -64,6 +66,17 @@ type CertBundle struct {
 	PrivKeyPEM   []byte
 	FullChainPEM []byte
 	Meta         Meta
+}
+
+// InventoryEntry describes whether a certificate bundle can be loaded now.
+// Name is retained so malformed store directory names can be reported even
+// when Addr could not be parsed.
+type InventoryEntry struct {
+	Name  string
+	Addr  netip.Addr
+	Meta  Meta
+	Ready bool
+	Err   error
 }
 
 // Store persists certificates on disk, one directory per IP.
@@ -198,6 +211,82 @@ func (s *Store) Count() int {
 		}
 	}
 	return count
+}
+
+// Inventory inspects the certificate store without loading PEM contents.
+// A missing base directory is an empty store. Other failures to read the base
+// directory are returned as a top-level error; bundle corruption is reported
+// on the corresponding entry.
+func (s *Store) Inventory() ([]InventoryEntry, error) {
+	dirs, err := os.ReadDir(s.baseDir)
+	if os.IsNotExist(err) {
+		return []InventoryEntry{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read certificate store: %w", err)
+	}
+
+	entries := make([]InventoryEntry, 0, len(dirs))
+	for _, dir := range dirs {
+		if !dir.IsDir() {
+			continue
+		}
+
+		entry := InventoryEntry{Name: dir.Name()}
+		addr, parseErr := privateip.ParseSubdomain(dir.Name())
+		if parseErr != nil {
+			entry.Err = parseErr
+			entries = append(entries, entry)
+			continue
+		}
+		entry.Addr = addr
+
+		path := filepath.Join(s.baseDir, dir.Name())
+		metaData, metaErr := os.ReadFile(filepath.Join(path, metaFile))
+		if metaErr != nil {
+			metaErr = fmt.Errorf("read meta: %w", metaErr)
+		} else if len(metaData) == 0 {
+			metaErr = fmt.Errorf("read meta: %s is empty", metaFile)
+		} else if err := json.Unmarshal(metaData, &entry.Meta); err != nil {
+			metaErr = fmt.Errorf("parse meta: %w", err)
+		}
+
+		entry.Err = errors.Join(metaErr, inspectPEM(filepath.Join(path, privkeyFile), privkeyFile), inspectPEM(filepath.Join(path, fullchainFile), fullchainFile))
+		entry.Ready = entry.Err == nil
+		entries = append(entries, entry)
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Addr.IsValid() != entries[j].Addr.IsValid() {
+			return entries[i].Addr.IsValid()
+		}
+		if entries[i].Addr.IsValid() && entries[i].Addr != entries[j].Addr {
+			return entries[i].Addr.Less(entries[j].Addr)
+		}
+		return entries[i].Name < entries[j].Name
+	})
+	return entries, nil
+}
+
+func inspectPEM(path, name string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", name, err)
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", name, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("stat %s: not a regular file", name)
+	}
+	if info.Size() == 0 {
+		return fmt.Errorf("stat %s: file is empty", name)
+	}
+
+	return nil
 }
 
 // ipDir returns the directory path for the given IP.

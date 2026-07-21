@@ -21,6 +21,7 @@ import (
 	"lucor.dev/lancert/internal/certservice"
 	"lucor.dev/lancert/internal/certstore"
 	"lucor.dev/lancert/internal/dnssrv"
+	"lucor.dev/lancert/internal/metrics"
 )
 
 // commitHash is set at build time via -ldflags "-X main.commitHash=<commit-sha>".
@@ -86,6 +87,25 @@ func run() error {
 	store := certstore.New(certsDir)
 	slog.Info("cert store ready", "path", certsDir, "count", store.Count())
 
+	// KPI collection is deliberately fail-open: metrics must never prevent DNS
+	// or certificate serving from starting.
+	var metricStore *metrics.Store
+	var metricRecorder metrics.Recorder = metrics.Disabled{}
+	var metricOpenErr error
+	metricStore, metricOpenErr = metrics.Open(filepath.Join(dataDir, "metrics.db"))
+	if metricOpenErr != nil {
+		slog.Error("metrics unavailable", "error", metricOpenErr)
+	} else {
+		metricRecorder = metricStore
+	}
+	defer func() {
+		if metricStore != nil {
+			if err := metricStore.Close(context.Background()); err != nil {
+				slog.Error("metrics shutdown error", "error", err)
+			}
+		}
+	}()
+
 	// Zone (FQDN with trailing dot for DNS, bare for cert service)
 	zone := envOr("LANCERT_ZONE", defaultZone)
 	if zone == "" {
@@ -107,6 +127,7 @@ func run() error {
 		SOAMname:   "ns1." + zone,
 		SOARname:   "admin." + zone,
 		CAAIssuers: []string{"letsencrypt.org"},
+		Recorder:   metricRecorder,
 	}
 
 	dnsServer := dnssrv.New(dnsCfg, txtStore)
@@ -147,13 +168,57 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	updateReadiness := func() {
+		if metricStore == nil {
+			return
+		}
+		snapshot := metricStore.Snapshot()
+		entries, err := store.Inventory()
+		if err != nil {
+			metricStore.SetReadiness(metrics.Readiness{Available: false, Degraded: true, Error: err.Error()})
+			return
+		}
+		byIP := make(map[netip.Addr]certstore.InventoryEntry, len(entries))
+		for _, entry := range entries {
+			if entry.Addr.IsValid() {
+				byIP[entry.Addr] = entry
+			}
+		}
+		var ready uint64
+		degraded := false
+		var firstErr string
+		for _, addr := range snapshot.ActiveTargets {
+			entry, ok := byIP[addr]
+			if !ok {
+				continue
+			}
+			if entry.Err != nil {
+				degraded = true
+				if firstErr == "" {
+					firstErr = fmt.Sprintf("certificate bundle %s: %v", addr, entry.Err)
+				}
+				continue
+			}
+			if entry.Ready && time.Until(entry.Meta.NotAfter) > 30*24*time.Hour {
+				ready++
+			}
+		}
+		metricStore.SetReadiness(metrics.Readiness{Active: snapshot.ActiveTargets30D, Ready: ready, Available: snapshot.TrackingComplete, Degraded: degraded, Error: firstErr})
+	}
+
 	realIP := api.NewRealIP(proxySubnet)
 	ipHasher := api.NewIPHasher(ipHashSecret)
 	issuanceLimiter := api.NewRateLimiter(ctx, api.IssuanceRPS, api.IssuanceBurst)
 	certificateReadLimiter := api.NewRateLimiter(ctx, api.CertificateReadRPS, api.CertificateReadBurst)
 
 	// HTTP API with middleware stack
-	apiHandler := api.New(certSvc)
+	statusSnapshot := func() metrics.Snapshot {
+		if metricStore == nil {
+			return metrics.UnavailableSnapshot(metricOpenErr)
+		}
+		return metricStore.Snapshot()
+	}
+	apiHandler := api.New(certSvc, statusSnapshot)
 	handler := api.Chain(apiHandler,
 		api.Recover,
 		api.SecurityHeaders,
@@ -206,6 +271,21 @@ func run() error {
 	// Pre-generate certificates for common IPs in the background
 	if pregen {
 		go certSvc.Pregen(ctx)
+	}
+	if metricStore != nil {
+		updateReadiness()
+		go func() {
+			ticker := time.NewTicker(15 * time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					updateReadiness()
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
 	}
 
 	// Block until shutdown signal or server crash

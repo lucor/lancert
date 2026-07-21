@@ -3,13 +3,27 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>lancert — Real Let's Encrypt Certificates for Local Development on Private IPs</title>
-<meta name="description" content="Real Let's Encrypt wildcard TLS certificates for private RFC 1918 IPs, designed for local development. One curl, valid HTTPS on your LAN.">
-<script defer src="https://analytics.lucor.dev/script.js" data-website-id="1c9b0509-2f00-493b-bb0a-da02ffb6ff1d"></script>
+<title>lancert — Local HTTPS Certificates for Private IP Addresses</title>
+  <meta name="description" content="Get Let's Encrypt wildcard TLS certificates for RFC 1918 private IP addresses. Build and test local HTTPS apps on your LAN without a custom CA or browser warnings.">
+  <meta property="og:title" content="lancert — Local HTTPS Certificates for Private IP Addresses">
+  <meta property="og:description" content="Get browser-trusted Let's Encrypt wildcard TLS certificates for private IP addresses on your LAN.">
+  <meta property="og:image" content="/assets/og-image-1200x630.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="lancert — Local HTTPS Certificates for Private IP Addresses">
+  <meta name="twitter:description" content="Get browser-trusted Let's Encrypt wildcard TLS certificates for private IP addresses on your LAN.">
+  <meta name="twitter:image" content="/assets/og-image-1200x630.png">
+  <meta name="theme-color" content="#FFFFFF">
+  <link rel="icon" href="/assets/favicon.ico" sizes="48x48">
+  <link rel="icon" href="/assets/favicon.svg" sizes="any" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+  {{if .Analytics}}<script defer src="https://analytics.lucor.dev/script.js" data-website-id="1c9b0509-2f00-493b-bb0a-da02ffb6ff1d"></script>{{end}}
 <style>
   :root {
-    --lan: #6BA3BE;
-    --lan-soft: #E8F2F7;
+    --lan: #078DE5;
+    --lan-soft: #E5F4FE;
     --cert: #6B9E8A;
     --cert-soft: #E5F0EA;
     --ink: #1a1a1a;
@@ -19,8 +33,8 @@
     --line: #e5e7eb;
     --bg: #ffffff;
     --surface: #f9fafb;
-    --font-sans: 'ui-sans-serif', '-apple-system', 'system-ui', 'Segoe UI', 'Helvetica Neue', sans-serif;
-    --font-mono: 'ui-monospace', 'SF Mono-Regular', 'SF Mono', 'Cascadia Code', 'Menlo', 'Courier New', monospace;
+    --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
   }
 
   *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
@@ -50,7 +64,7 @@
 
   /* ── NAV ── */
   .nav {
-    max-width: 800px;
+    max-width: 1040px;
     margin: 0 auto;
     padding: 32px 24px 0;
     display: flex;
@@ -62,14 +76,13 @@
     display: flex;
     align-items: center;
     text-decoration: none;
-    font-weight: 700;
-    font-size: 22px;
-    letter-spacing: -0.3px;
+    font-weight: 750;
+    font-size: 20px;
+    letter-spacing: -.03em;
   }
 
   .logo:hover { text-decoration: none; }
-  .logo .lan { color: var(--lan); }
-  .logo .cert { color: var(--cert); }
+  .logo img { display: block; width: 128px; height: auto; }
 
   .nav-links {
     display: flex;
@@ -103,17 +116,17 @@
 
   /* ── HERO ── */
   .hero {
-    max-width: 800px;
+    max-width: 1040px;
     margin: 0 auto;
     padding: 72px 24px 64px;
     text-align: center;
   }
 
   .hero h1 {
-    font-size: 40px;
-    font-weight: 800;
-    letter-spacing: -1.2px;
-    line-height: 1.15;
+    font-size: clamp(40px, 7vw, 58px);
+    font-weight: 750;
+    letter-spacing: -.045em;
+    line-height: 1.04;
     color: var(--ink);
     margin-bottom: 16px;
   }
@@ -122,7 +135,7 @@
     font-size: 18px;
     color: var(--muted);
     line-height: 1.65;
-    max-width: 500px;
+    max-width: 620px;
     margin: 0 auto;
   }
 
@@ -214,7 +227,7 @@
 
   /* ── SECTIONS ── */
   .section {
-    max-width: 800px;
+    max-width: 1040px;
     margin: 0 auto;
     padding: 72px 24px;
   }
@@ -237,7 +250,7 @@
 
   /* ── CUSTOM IP SECTION ── */
   .custom-ip {
-    max-width: 800px;
+    max-width: 1040px;
     margin: 0 auto;
     padding: 0 24px 72px;
   }
@@ -452,7 +465,7 @@
 
   /* ── DONATE ── */
   .donate {
-    max-width: 800px;
+    max-width: 1040px;
     margin: 0 auto;
     padding: 0 24px 72px;
   }
@@ -487,10 +500,21 @@
 
   .donate-link:hover { opacity: 0.85; text-decoration: none; }
 
+  .site-footer {
+    max-width: 1040px;
+    margin: 0 auto;
+    padding: 24px 24px 48px;
+    color: var(--muted);
+    font-size: 13px;
+    text-align: center;
+  }
+
+  .site-footer p { margin: 0; }
+
   /* ── RESPONSIVE ── */
   @media (max-width: 640px) {
     .hero { padding: 56px 20px 48px; }
-    .hero h1 { font-size: 30px; }
+    .hero h1 { font-size: 38px; }
     .hero .subtitle { font-size: 16px; }
     .terminal-body { font-size: 11.5px; line-height: 1.9; }
     .section { padding: 56px 20px; }
@@ -522,14 +546,15 @@
 <body>
 
 <nav class="nav">
-  <a href="/" class="logo"><span class="lan">lan</span><span class="cert">cert</span></a>
+  <a href="/" class="logo" aria-label="lancert home"><img src="/assets/lancert-logo.svg" alt="lancert"></a>
   <div class="nav-links">
-    <a href="#why">Why</a>
-    <a href="#security">Security</a>
+    <a href="#why">Why local HTTPS</a>
     <a href="#how">How it works</a>
-    <a href="/docs">API Docs</a>
     <a href="#example">Example</a>
+    <a href="#security">Security</a>
     <a href="#faq">FAQ</a>
+    <a href="/docs">API Docs</a>
+    <a href="/status">Service status</a>
     <a class="gh-star" href="https://github.com/lucor/lancert">
       <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25z"/></svg>
       Star on GitHub
@@ -539,10 +564,9 @@
 
 <main>
 <header class="hero">
-  <h1>Real Let's Encrypt Certificates for Local Development on Private IPs</h1>
+  <h1>Local HTTPS for private IP addresses.</h1>
   <p class="subtitle">
-    Wildcard TLS certificates for RFC 1918 IPs.
-    One <code>curl</code>, valid HTTPS on your LAN.
+    Get browser-trusted Let’s Encrypt wildcard TLS certificates for private IP addresses on your LAN. Test local apps on real devices without a custom CA or certificate warnings.
   </p>
 
   <div class="hero-terminal">
@@ -602,23 +626,23 @@
 
 <!-- WHY -->
 <section class="section" id="why">
-  <h2>Why lancert</h2>
+  <h2>Why use lancert for local HTTPS?</h2>
   <div class="features">
     <div class="feat">
-      <h3>Real certificates</h3>
-      <p>Real Let's Encrypt certificates, trusted by every browser on every device. No custom CA to install, no per-device setup, no warnings.</p>
+      <h3>Browser-trusted certificates</h3>
+      <p>Let’s Encrypt certificates that browsers already trust. No custom CA, device setup, or certificate warnings.</p>
     </div>
     <div class="feat">
-      <h3>Test from any device</h3>
-      <p>Service Workers, push notifications, WebRTC — anything that requires HTTPS on a real device on your LAN.</p>
+      <h3>Test on real devices</h3>
+      <p>Use service workers, push notifications, WebRTC, and other HTTPS-only APIs from devices on your LAN.</p>
     </div>
     <div class="feat">
-      <h3>One curl</h3>
-      <p>No signup, no API keys, no DNS config. One request, certificate ready.</p>
+      <h3>No local CA setup</h3>
+      <p>No signup, API key, DNS setup, or certificate authority to install. Request a certificate when you need it.</p>
     </div>
     <div class="feat">
-      <h3>Wildcard included</h3>
-      <p>Each cert covers the base domain and <code>*.192-168-1-50.lancert.dev</code> — use any subdomain without requesting additional certificates.</p>
+      <h3>Wildcard names included</h3>
+      <p>Each certificate covers the base domain and <code>*.192-168-1-50.lancert.dev</code>, so one certificate works across your local subdomains.</p>
     </div>
   </div>
 </section>
@@ -636,7 +660,7 @@
 
 <!-- HOW IT WORKS -->
 <section class="section" id="how">
-  <h2>How it works</h2>
+  <h2>How local HTTPS works</h2>
   <div class="timeline">
     <div class="timeline-item">
       <div class="timeline-mid"><div class="timeline-dot"></div><div class="timeline-line"></div></div>
@@ -775,6 +799,10 @@ curl -o privkey.pem https://lancert.dev/certs/192.168.1.50/privkey.pem"><svg ari
 </div>
 
 </main>
+
+<footer class="site-footer">
+  <p>The <a href="https://github.com/lucor/lancert/blob/main/LICENSE">lancert software is MIT-licensed</a>. The software and DNS service are provided “as is”, without warranty.</p>
+</footer>
 
 <script>
 document.querySelectorAll('.copy-btn').forEach(function(btn) {

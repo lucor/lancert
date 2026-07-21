@@ -24,9 +24,8 @@
 //	  200  remaining validity in seconds and human-readable form
 //	  404  no certificate on disk for this IP
 //
-//	GET /stats
-//	  200  cert_count, total_issued, budget_used, budget_limit,
-//	       budget_resets_in, pending_issuances, failed_issuances, uptime
+//	GET /status
+//	  200  cacheable HTML view of DNS activity and certificate readiness
 //
 //	GET /health
 //	  200  {"status": "ok"}
