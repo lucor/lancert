@@ -47,6 +47,12 @@ type Breakdown struct {
 	Queries uint64
 }
 
+// DailyLookup is an aggregate count for one UTC date.
+type DailyLookup struct {
+	Date    string
+	Queries uint64
+}
+
 // Readiness is the current certificate cache readiness result. It is kept
 // separate from historical DNS aggregates because the certificate store is
 // mutable and is rescanned periodically.
@@ -61,29 +67,30 @@ type Readiness struct {
 // Snapshot is a point-in-time copy. Snapshot() deep-copies its slices, so a
 // caller cannot mutate the copy retained by the metrics service.
 type Snapshot struct {
-	Queries24H         uint64
-	WriteAttempts24H   uint64
-	WriteSuccesses24H  uint64
-	RecentQPS          float64
-	RecentP95          time.Duration
-	RecentP95Overflow  bool
-	RecentWindow       time.Duration
-	ActiveTargets30D   uint64
-	ActivePrefixes30D  uint64
-	TopBlocks          []Breakdown
-	TopPrefixes        []Breakdown
-	TopTargets         []Breakdown
-	OtherBlockQueries  uint64
-	OtherPrefixQueries uint64
-	OtherTargetQueries uint64
-	TrackingComplete   bool
-	FreshAt            time.Time
-	Degraded           bool
-	Unavailable        bool
-	Error              string
-	LastFlushAt        time.Time
-	LastFlushError     string
-	Readiness          Readiness
+	Queries24H          uint64
+	WriteAttempts24H    uint64
+	WriteSuccesses24H   uint64
+	RecentQueries       uint64
+	RecentWindow        time.Duration
+	ResponseP95         time.Duration
+	ResponseP95Overflow bool
+	DailyLookups        []DailyLookup
+	ActiveTargets30D    uint64
+	ActivePrefixes30D   uint64
+	TopBlocks           []Breakdown
+	TopPrefixes         []Breakdown
+	TopTargets          []Breakdown
+	OtherBlockQueries   uint64
+	OtherPrefixQueries  uint64
+	OtherTargetQueries  uint64
+	TrackingComplete    bool
+	FreshAt             time.Time
+	Degraded            bool
+	Unavailable         bool
+	Error               string
+	LastFlushAt         time.Time
+	LastFlushError      string
+	Readiness           Readiness
 }
 
 // Option configures a Store.
@@ -494,11 +501,35 @@ func (s *Store) RebuildSnapshot(ctx context.Context) error {
 	var out Snapshot
 	out.FreshAt = now
 	out.TrackingComplete = true
-	row := s.db.QueryRowContext(ctx, `SELECT COALESCE(sum(queries),0),COALESCE(sum(write_attempts),0),COALESCE(sum(write_successes),0) FROM dns_hourly WHERE hour>=?`, cutoff)
-	if err := row.Scan(&out.Queries24H, &out.WriteAttempts24H, &out.WriteSuccesses24H); err != nil {
+	var responseHist [histogramLen]uint64
+	row := s.db.QueryRowContext(ctx, `SELECT COALESCE(sum(queries),0),COALESCE(sum(write_attempts),0),COALESCE(sum(write_successes),0),COALESCE(sum(h0),0),COALESCE(sum(h1),0),COALESCE(sum(h2),0),COALESCE(sum(h3),0),COALESCE(sum(h4),0),COALESCE(sum(h5),0),COALESCE(sum(h6),0),COALESCE(sum(h7),0),COALESCE(sum(h8),0),COALESCE(sum(h9),0),COALESCE(sum(h10),0),COALESCE(sum(h11),0) FROM dns_hourly WHERE hour>=?`, cutoff)
+	if err := row.Scan(&out.Queries24H, &out.WriteAttempts24H, &out.WriteSuccesses24H, &responseHist[0], &responseHist[1], &responseHist[2], &responseHist[3], &responseHist[4], &responseHist[5], &responseHist[6], &responseHist[7], &responseHist[8], &responseHist[9], &responseHist[10], &responseHist[11]); err != nil {
 		return s.snapshotError(err)
 	}
+	out.ResponseP95, out.ResponseP95Overflow = percentile95(responseHist)
 	startDate, endDate := now.AddDate(0, 0, -29).Format("2006-01-02"), dateOf(now)
+	dailyEnd := dateOf(now.AddDate(0, 0, 1)) + "T00:00:00Z"
+	dailyRows, err := s.db.QueryContext(ctx, `SELECT substr(hour,1,10),sum(queries) FROM dns_hourly WHERE hour>=? AND hour<? GROUP BY substr(hour,1,10)`, startDate+"T00:00:00Z", dailyEnd)
+	if err != nil {
+		return s.snapshotError(err)
+	}
+	daily := make(map[string]uint64)
+	for dailyRows.Next() {
+		var date string
+		var queries uint64
+		if err = dailyRows.Scan(&date, &queries); err != nil {
+			dailyRows.Close()
+			return s.snapshotError(err)
+		}
+		daily[date] = queries
+	}
+	if err = dailyRows.Close(); err != nil {
+		return s.snapshotError(err)
+	}
+	for day := now.AddDate(0, 0, -29); !day.After(now); day = day.AddDate(0, 0, 1) {
+		date := dateOf(day)
+		out.DailyLookups = append(out.DailyLookups, DailyLookup{Date: date, Queries: daily[date]})
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT target,sum(queries) FROM target_activity_daily WHERE date BETWEEN ? AND ? GROUP BY target`, startDate, endDate)
 	if err != nil {
 		return s.snapshotError(err)
@@ -551,10 +582,7 @@ func (s *Store) RebuildSnapshot(ctx context.Context) error {
 	if out.RecentWindow < 0 {
 		out.RecentWindow = 0
 	}
-	if out.RecentWindow > 0 {
-		out.RecentQPS = float64(recent.queries) / out.RecentWindow.Seconds()
-	}
-	out.RecentP95, out.RecentP95Overflow = percentile95(recent.hist)
+	out.RecentQueries = recent.queries
 	out.LastFlushAt = lastFlushAt
 	if lastFlushErr != nil {
 		out.Degraded = true
@@ -652,6 +680,7 @@ func (s *Store) Snapshot() Snapshot {
 	r.TopBlocks = append([]Breakdown(nil), r.TopBlocks...)
 	r.TopPrefixes = append([]Breakdown(nil), r.TopPrefixes...)
 	r.TopTargets = append([]Breakdown(nil), r.TopTargets...)
+	r.DailyLookups = append([]DailyLookup(nil), r.DailyLookups...)
 	return r
 }
 

@@ -32,7 +32,10 @@ func TestPersistenceUTCAndP95(t *testing.T) {
 	snap := s.Snapshot()
 	require.Equal(t, uint64(20), snap.Queries24H)
 	require.Equal(t, uint64(18), snap.WriteSuccesses24H)
-	require.Equal(t, 100*time.Millisecond, snap.RecentP95)
+	require.Equal(t, uint64(20), snap.RecentQueries)
+	require.Equal(t, 100*time.Millisecond, snap.ResponseP95)
+	require.Len(t, snap.DailyLookups, 30)
+	require.Equal(t, DailyLookup{Date: "2026-07-21", Queries: 20}, snap.DailyLookups[29])
 	require.Equal(t, uint64(1), snap.ActiveTargets30D)
 	require.Equal(t, uint64(1), snap.ActivePrefixes30D)
 	require.NoError(t, s.Close(context.Background()))
@@ -130,8 +133,8 @@ func TestTargetsAndResponsesAreIndependent(t *testing.T) {
 	require.Equal(t, uint64(2), latencyCount)
 	require.Equal(t, uint64((302 * time.Millisecond).Microseconds()), latencySumUS)
 	require.Equal(t, uint64((300 * time.Millisecond).Microseconds()), latencyMaxUS)
-	require.True(t, snap.RecentP95Overflow)
-	require.Equal(t, LatencyBounds[len(LatencyBounds)-1], snap.RecentP95)
+	require.True(t, snap.ResponseP95Overflow)
+	require.Equal(t, LatencyBounds[len(LatencyBounds)-1], snap.ResponseP95)
 	require.NoError(t, s.Close(context.Background()))
 }
 
@@ -160,11 +163,11 @@ func TestRecentWindowUsesStartupTime(t *testing.T) {
 	now = now.Add(15 * time.Second)
 	require.NoError(t, s.RebuildSnapshot(context.Background()))
 	require.Equal(t, 15*time.Second, s.Snapshot().RecentWindow)
-	require.InDelta(t, 1.0/15.0, s.Snapshot().RecentQPS, 0.0001)
+	require.Equal(t, uint64(1), s.Snapshot().RecentQueries)
 	now = now.Add(-time.Minute)
 	require.NoError(t, s.RebuildSnapshot(context.Background()))
 	require.Zero(t, s.Snapshot().RecentWindow)
-	require.Zero(t, s.Snapshot().RecentQPS)
+	require.Zero(t, s.Snapshot().RecentQueries)
 	require.NoError(t, s.Close(context.Background()))
 }
 

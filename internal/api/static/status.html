@@ -73,10 +73,24 @@
     h2 { margin-bottom: 0; color: var(--ink); font-size: 22px; letter-spacing: -.025em; }
     .section-heading p { margin-bottom: 0; color: var(--muted); }
     .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+    .cards.compact { max-width: 500px; }
     .card { min-height: 154px; padding: 24px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
     .card-label { margin-bottom: 12px; color: var(--muted); font-size: 13px; font-weight: 650; }
     .value { margin-bottom: 5px; color: var(--ink); font-size: clamp(26px, 4vw, 36px); font-weight: 740; line-height: 1.1; letter-spacing: -.035em; }
     .context { margin: 0; color: var(--muted); font-size: 13px; }
+
+    .chart-panel { margin-top: 24px; padding: 24px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+    .chart-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
+    .chart-header h3 { margin: 0 0 4px; color: var(--ink); font-size: 15px; }
+    .chart-header p { margin: 0; color: var(--muted); font-size: 13px; }
+    .chart-peak { flex: 0 0 auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+    .lookup-chart { margin-top: 22px; }
+    .lookup-chart svg { display: block; width: 100%; height: 180px; overflow: visible; }
+    .chart-grid { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
+    .chart-bar { fill: var(--lan); opacity: .82; transition: opacity .15s; }
+    .chart-bar:hover { opacity: 1; }
+    .chart-axis { display: flex; justify-content: space-between; margin-top: 8px; color: var(--muted); font-size: 11px; }
+    .chart-panel > .empty { margin-top: 20px; }
 
     progress { width: 100%; height: 5px; margin-top: 18px; border: 0; border-radius: 99px; overflow: hidden; background: var(--line); }
     progress::-webkit-progress-bar { background: var(--line); }
@@ -105,6 +119,8 @@
       .section-heading { grid-template-columns: 1fr; gap: 8px; }
       .cards, .tables { grid-template-columns: 1fr; }
       .card { min-height: 0; }
+      .chart-panel { padding: 20px; }
+      .lookup-chart svg { height: 140px; }
       .table-note { min-height: 0; }
       .status-summary { align-items: flex-start; flex-direction: column; gap: 8px; }
     }
@@ -153,22 +169,44 @@
             {{if .WriteAttempts24H}}<progress value="{{.WriteSuccesses24H}}" max="{{.WriteAttempts24H}}" aria-label="DNS responses delivered"></progress>{{end}}
           </article>
           <article class="card">
-            <div class="card-label">Queries per second</div>
-            <div class="value">{{.RecentQPS}}</div>
-            <p class="context">Based on {{.Window}} of activity</p>
+            <div class="card-label">Recent lookups</div>
+            <div class="value">{{.RecentLookups}}</div>
+            <p class="context">{{.RecentPeriod}}</p>
           </article>
           <article class="card">
             <div class="card-label">Response time</div>
-            <div class="value">{{.RecentP95}}</div>
-            <p class="context">95% of recent responses finished within this time</p>
+            <div class="value">{{.ResponseP95}}</div>
+            <p class="context">95% of DNS responses · Last 24 hours</p>
           </article>
+        </div>
+        <div class="chart-panel">
+          <div class="chart-header">
+            <div>
+              <h3>Lookup trend</h3>
+              <p>Daily local address lookups over the last 30 days.</p>
+            </div>
+            {{if .HasLookupData}}<span class="chart-peak">Peak: {{.ChartMax}} per day</span>{{end}}
+          </div>
+          {{if .HasLookupData}}
+          <div class="lookup-chart">
+            <svg viewBox="0 0 880 160" preserveAspectRatio="none" role="img" aria-label="Daily local address lookups from {{.ChartStart}} to {{.ChartEnd}}">
+              <line class="chart-grid" x1="0" y1="10" x2="880" y2="10"></line>
+              <line class="chart-grid" x1="0" y1="85" x2="880" y2="85"></line>
+              <line class="chart-grid" x1="0" y1="160" x2="880" y2="160"></line>
+              {{range .LookupChart}}<g><title>{{.Label}}: {{.Queries}} lookups</title><rect class="chart-bar" x="{{.X}}" y="{{.Y}}" width="19" height="{{.Height}}" rx="3"></rect></g>{{end}}
+            </svg>
+            <div class="chart-axis"><span>{{.ChartStart}}</span><span>{{.ChartEnd}}</span></div>
+          </div>
+          {{else}}
+            <p class="empty">No lookup activity recorded yet.</p>
+          {{end}}
         </div>
       </section>
 
-      <section aria-labelledby="coverage-heading">
+      <section aria-labelledby="activity-summary-heading">
         <div class="section-heading">
-          <h2 id="coverage-heading">Certificate coverage</h2>
-          <p>Recent local address activity and certificates currently available from cache.</p>
+          <h2 id="activity-summary-heading">Local address activity</h2>
+          <p>Private IP addresses requested through DNS in the last 30 days. This does not indicate that a certificate exists.</p>
         </div>
         <div class="cards">
           <article class="card">
@@ -181,10 +219,19 @@
             <div class="value">{{if .TrackingComplete}}{{.ActivePrefixes30D}}{{else}}Unavailable{{end}}</div>
             <p class="context">Unique /24 ranges containing those addresses</p>
           </article>
+        </div>
+      </section>
+
+      <section aria-labelledby="cache-heading">
+        <div class="section-heading">
+          <h2 id="cache-heading">Certificate cache</h2>
+          <p>Certificates stored by lancert and available without a new Let’s Encrypt request.</p>
+        </div>
+        <div class="cards compact">
           <article class="card">
-            <div class="card-label">Certificates ready</div>
-            <div class="value">{{.Readiness}}</div>
-            <p class="context">Cached and ready to serve without contacting Let’s Encrypt</p>
+            <div class="card-label">Ready to serve</div>
+            <div class="value">{{.ReadyCertificates}}</div>
+            <p class="context">{{.CacheContext}}</p>
             {{if and .Snapshot.Readiness.Available .Snapshot.Readiness.Total}}<progress value="{{.Snapshot.Readiness.Ready}}" max="{{.Snapshot.Readiness.Total}}" aria-label="Certificates ready"></progress>{{end}}
           </article>
         </div>

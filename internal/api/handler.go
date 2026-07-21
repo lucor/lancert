@@ -279,25 +279,41 @@ func (h *Handler) servePEM(w http.ResponseWriter, r *http.Request, kind string) 
 
 type statusPageData struct {
 	metrics.Snapshot
-	SuccessPercent string
-	Readiness      string
-	RecentQPS      string
-	RecentP95      string
-	Window         string
-	LastUpdated    string
+	SuccessPercent    string
+	RecentLookups     string
+	RecentPeriod      string
+	ResponseP95       string
+	LastUpdated       string
+	ReadyCertificates string
+	CacheContext      string
+	LookupChart       []lookupChartBar
+	ChartStart        string
+	ChartEnd          string
+	ChartMax          uint64
+	HasLookupData     bool
+}
+
+type lookupChartBar struct {
+	X       int
+	Y       int
+	Height  int
+	Label   string
+	Queries uint64
 }
 
 func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s := h.snapshot()
 	data := statusPageData{
-		Snapshot:       s,
-		SuccessPercent: "Not available",
-		Readiness:      "Not available",
-		RecentQPS:      "Not available",
-		RecentP95:      "Not available",
-		Window:         "startup",
-		LastUpdated:    "Not available",
+		Snapshot:          s,
+		SuccessPercent:    "Not available",
+		RecentLookups:     strconv.FormatUint(s.RecentQueries, 10),
+		RecentPeriod:      "Last 5 minutes",
+		ResponseP95:       "Not available",
+		LastUpdated:       "Not available",
+		ReadyCertificates: "Unavailable",
+		CacheContext:      "Certificate cache unavailable",
 	}
+	data.LookupChart, data.ChartStart, data.ChartEnd, data.ChartMax, data.HasLookupData = buildLookupChart(s.DailyLookups)
 	if !s.FreshAt.IsZero() {
 		data.LastUpdated = s.FreshAt.Format("2 Jan 2006, 15:04 UTC")
 	}
@@ -305,19 +321,19 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 		data.SuccessPercent = fmt.Sprintf("%.1f%%", float64(s.WriteSuccesses24H)*100/float64(s.WriteAttempts24H))
 	}
 	if s.Readiness.Available {
-		data.Readiness = "No cached certificates"
-		if s.Readiness.Total > 0 {
-			data.Readiness = fmt.Sprintf("%d of %d · %.1f%%", s.Readiness.Ready, s.Readiness.Total, float64(s.Readiness.Ready)*100/float64(s.Readiness.Total))
+		data.ReadyCertificates = strconv.FormatUint(s.Readiness.Ready, 10)
+		data.CacheContext = fmt.Sprintf("%d certificates cached", s.Readiness.Total)
+		if notReady := s.Readiness.Total - min(s.Readiness.Ready, s.Readiness.Total); notReady > 0 {
+			data.CacheContext += fmt.Sprintf(" · %d not ready", notReady)
 		}
 	}
-	if s.RecentWindow > 0 {
-		data.RecentQPS = fmt.Sprintf("%.2f", s.RecentQPS)
-		data.Window = s.RecentWindow.Round(time.Second).String()
+	if s.RecentWindow < 5*time.Minute {
+		data.RecentPeriod = "Since startup"
 	}
-	if s.RecentP95 > 0 {
-		data.RecentP95 = s.RecentP95.String()
-		if s.RecentP95Overflow {
-			data.RecentP95 = ">" + data.RecentP95
+	if s.ResponseP95 > 0 {
+		data.ResponseP95 = s.ResponseP95.String()
+		if s.ResponseP95Overflow {
+			data.ResponseP95 = ">" + data.ResponseP95
 		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -325,6 +341,39 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if err := statusTemplate.Execute(w, data); err != nil {
 		slog.Error("status page: render failed", "error", err)
 	}
+}
+
+func buildLookupChart(days []metrics.DailyLookup) ([]lookupChartBar, string, string, uint64, bool) {
+	if len(days) == 0 {
+		return nil, "", "", 0, false
+	}
+	var maxQueries uint64
+	for _, day := range days {
+		maxQueries = max(maxQueries, day.Queries)
+	}
+	bars := make([]lookupChartBar, 0, len(days))
+	for i, day := range days {
+		height := 0
+		if day.Queries > 0 {
+			height = max(2, int(day.Queries*150/maxQueries))
+		}
+		bars = append(bars, lookupChartBar{
+			X:       10 + i*29,
+			Y:       160 - height,
+			Height:  height,
+			Label:   chartDateLabel(day.Date),
+			Queries: day.Queries,
+		})
+	}
+	return bars, chartDateLabel(days[0].Date), chartDateLabel(days[len(days)-1].Date), maxQueries, maxQueries > 0
+}
+
+func chartDateLabel(date string) string {
+	t, err := time.Parse(time.DateOnly, date)
+	if err != nil {
+		return date
+	}
+	return t.Format("2 Jan")
 }
 
 // handleHealth is a simple liveness probe.

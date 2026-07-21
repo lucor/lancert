@@ -51,14 +51,18 @@ func TestStatus(t *testing.T) {
 	store := certstore.New(t.TempDir())
 	svc := certservice.New(certservice.Config{Zone: "lancert.dev", Staging: true}, store, dnssrv.NewTXTStore())
 	h := New(svc, func() metrics.Snapshot {
-		return metrics.Snapshot{Queries24H: 12, WriteAttempts24H: 10, WriteSuccesses24H: 9, RecentQPS: 2.5, RecentWindow: time.Minute, RecentP95: 2 * time.Millisecond, TrackingComplete: true, ActiveTargets30D: 3, ActivePrefixes30D: 2, Readiness: metrics.Readiness{Available: true, Total: 3, Ready: 2}}
+		return metrics.Snapshot{Queries24H: 12, WriteAttempts24H: 10, WriteSuccesses24H: 9, RecentQueries: 2, RecentWindow: time.Minute, ResponseP95: 2 * time.Millisecond, DailyLookups: []metrics.DailyLookup{{Date: "2026-07-20", Queries: 4}, {Date: "2026-07-21", Queries: 12}}, TrackingComplete: true, ActiveTargets30D: 3, ActivePrefixes30D: 2, Readiness: metrics.Readiness{Available: true, Total: 3, Ready: 2}}
 	})
 	req := httptest.NewRequest(http.MethodGet, "/status", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Body.String(), "Certificate coverage")
-	assert.Contains(t, rec.Body.String(), "2 of 3 · 66.7%")
+	assert.Contains(t, rec.Body.String(), "Local address activity")
+	assert.Contains(t, rec.Body.String(), "Certificate cache")
+	assert.Contains(t, rec.Body.String(), "Ready to serve")
+	assert.Contains(t, rec.Body.String(), "3 certificates cached · 1 not ready")
+	assert.Contains(t, rec.Body.String(), "Lookup trend")
+	assert.Contains(t, rec.Body.String(), "21 Jul: 12 lookups")
 }
 
 func TestAssets(t *testing.T) {
