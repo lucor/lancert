@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/netip"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"lucor.dev/lancert/internal/accountkey"
+	acmeissue "lucor.dev/lancert/internal/acme"
 	"lucor.dev/lancert/internal/api"
 	"lucor.dev/lancert/internal/certservice"
 	"lucor.dev/lancert/internal/certstore"
@@ -52,7 +54,7 @@ func run() error {
 		dataDir  string
 		email    string
 		serverIP string
-		staging  bool
+		acmeEnv  string
 		pregen   bool
 	)
 
@@ -61,9 +63,16 @@ func run() error {
 	flag.StringVar(&dataDir, "data-dir", envOr("LANCERT_DATA_DIR", defaultDataDir), "data directory for certs and keys")
 	flag.StringVar(&email, "email", envOr("LANCERT_EMAIL", ""), "email for Let's Encrypt account (optional)")
 	flag.StringVar(&serverIP, "server-ip", envOr("LANCERT_SERVER_IP", ""), "public IP of this server (required, used for DNS A records)")
-	flag.BoolVar(&staging, "staging", envBool("LANCERT_STAGING"), "use Let's Encrypt staging environment")
+	flag.StringVar(&acmeEnv, "acme-env", envOr("LANCERT_ACME_ENV", ""), "ACME environment: production, staging, or local")
 	flag.BoolVar(&pregen, "pregen", envBool("LANCERT_PREGEN"), "pre-generate certificates for common IPs at startup")
 	flag.Parse()
+	if acmeEnv == "" {
+		acmeEnv = string(acmeissue.EnvironmentProduction)
+	}
+	environment := acmeissue.Environment(acmeEnv)
+	if environment != acmeissue.EnvironmentProduction && environment != acmeissue.EnvironmentStaging && environment != acmeissue.EnvironmentLocal {
+		return fmt.Errorf("invalid LANCERT_ACME_ENV %q (want production, staging, or local)", acmeEnv)
+	}
 
 	if serverIP == "" {
 		return fmt.Errorf("LANCERT_SERVER_IP or -server-ip is required")
@@ -85,6 +94,9 @@ func run() error {
 	// Certificate store
 	certsDir := filepath.Join(dataDir, "certs")
 	store := certstore.New(certsDir)
+	if err := store.MigrateLegacy(); err != nil {
+		return fmt.Errorf("migrate certificate store: %w", err)
+	}
 	slog.Info("cert store ready", "path", certsDir, "count", store.Count())
 
 	// KPI collection is deliberately fail-open: metrics must never prevent DNS
@@ -115,6 +127,18 @@ func run() error {
 		zone += "."
 	}
 	bareZone := zone[:len(zone)-1] // e.g. "lancert.dev"
+	var resolver *net.Resolver
+	caCertPath := ""
+	if environment == acmeissue.EnvironmentLocal {
+		caCertPath = filepath.Join(".mise", "pebble", "rootCA.pem")
+		host, port, splitErr := net.SplitHostPort(dnsAddr)
+		if splitErr != nil {
+			return fmt.Errorf("local ACME requires LANCERT_DNS_ADDR with host and port: %w", splitErr)
+		}
+		resolver = &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort(host, port))
+		}}
+	}
 
 	// DNS TXT challenge store
 	txtStore := dnssrv.NewTXTStore()
@@ -135,11 +159,12 @@ func run() error {
 	// Certificate service
 	certSvc := certservice.New(
 		certservice.Config{
-			Zone:       bareZone,
-			Email:      email,
-			AccountKey: accountKey,
-			Staging:    staging,
-			DataDir:    dataDir,
+			Zone:        bareZone,
+			Email:       email,
+			AccountKey:  accountKey,
+			Environment: environment,
+			CACertPath:  caCertPath,
+			Resolver:    resolver,
 		},
 		store,
 		txtStore,
@@ -239,13 +264,14 @@ func run() error {
 
 	// Wait for ready
 	version := "lancert@" + commitHash[:min(7, len(commitHash))]
-	slog.Info("service started", "version", version, "staging", staging, "certs", store.Count())
+	slog.Info("service started", "version", version, "acme_env", environment, "certs", store.Count())
 	slog.Warn("HTTP API serves private keys over plaintext — use a TLS-terminating reverse proxy in production")
 
 	// Pre-generate certificates for common IPs in the background
 	if pregen {
 		go certSvc.Pregen(ctx)
 	}
+	certSvc.StartRenewalWorker(ctx)
 	if metricStore != nil {
 		updateReadiness()
 		go func() {

@@ -179,3 +179,26 @@ func TestStore_InventoryUnreadableBase(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, entries)
 }
+
+func TestStore_MigrateLegacyPreservesSource(t *testing.T) {
+	base := t.TempDir()
+	store := New(base)
+	addr := netip.MustParseAddr("192.168.1.60")
+	key, cert := generateTestCert(t, []string{"192-168-1-60.lancert.dev"})
+	dir := filepath.Join(base, "192-168-1-60")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	chain := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert})
+	meta := `{"domains":["192-168-1-60.lancert.dev"],"issued_at":"2026-01-01T00:00:00Z","not_after":"2027-01-01T00:00:00Z"}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, privkeyFile), key, filePerm))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, fullchainFile), chain, filePerm))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, metaFile), []byte(meta), filePerm))
+
+	require.NoError(t, store.MigrateLegacy())
+	bundle, err := store.Load(addr)
+	require.NoError(t, err)
+	require.NotNil(t, bundle)
+	assert.Equal(t, "2026-01-01T00:00:00Z", bundle.Meta.IssuedAt.Format(time.RFC3339))
+	assert.FileExists(t, filepath.Join(dir, bundleFile))
+	assert.FileExists(t, filepath.Join(dir, privkeyFile))
+	assert.FileExists(t, filepath.Join(base, formatVersionFile))
+}

@@ -1,8 +1,12 @@
 package api
 
 import (
+	"crypto/sha256"
+	"crypto/x509"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -131,13 +135,7 @@ func (h *Handler) handleIssueCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if bundle != nil {
-		writeJSON(w, http.StatusOK, certResponse(addr, bundle))
-		return
-	}
-
-	// Budget precheck before triggering.
-	if h.service.BudgetExhausted() {
-		writeError(w, http.StatusServiceUnavailable, "certificate issuance budget exhausted, try again later")
+		writeCertificateJSON(w, r, addr, bundle)
 		return
 	}
 
@@ -145,7 +143,7 @@ func (h *Handler) handleIssueCert(w http.ResponseWriter, r *http.Request) {
 	status := h.service.TriggerIssuance(addr)
 
 	if status.Fail != nil {
-		writeError(w, status.Fail.Status, status.Fail.Msg)
+		writeErrorRetry(w, status.Fail.Status, status.Fail.Msg, status.Fail.RetryAfter)
 		return
 	}
 
@@ -171,7 +169,7 @@ func (h *Handler) handleGetCert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if status.Bundle != nil {
-		writeJSON(w, http.StatusOK, certResponse(addr, status.Bundle))
+		writeCertificateJSON(w, r, addr, status.Bundle)
 		return
 	}
 
@@ -181,7 +179,7 @@ func (h *Handler) handleGetCert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if status.Fail != nil {
-		writeError(w, status.Fail.Status, status.Fail.Msg)
+		writeErrorRetry(w, status.Fail.Status, status.Fail.Msg, status.Fail.RetryAfter)
 		return
 	}
 
@@ -242,6 +240,9 @@ func (h *Handler) servePEM(w http.ResponseWriter, r *http.Request, kind string) 
 	}
 
 	if status.Bundle != nil {
+		if certificateNotModified(w, r, status.Bundle) {
+			return
+		}
 		var contentType string
 		var data []byte
 		if kind == pemFullChain {
@@ -270,11 +271,46 @@ func (h *Handler) servePEM(w http.ResponseWriter, r *http.Request, kind string) 
 	}
 
 	if status.Fail != nil {
-		writeError(w, status.Fail.Status, status.Fail.Msg)
+		writeErrorRetry(w, status.Fail.Status, status.Fail.Msg, status.Fail.RetryAfter)
 		return
 	}
 
 	writeError(w, http.StatusNotFound, "no certificate found for this IP")
+}
+
+func certificateETag(bundle *certstore.CertBundle) string {
+	block, _ := pem.Decode(bundle.FullChainPEM)
+	if block == nil {
+		return ""
+	}
+	if _, err := x509.ParseCertificate(block.Bytes); err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(block.Bytes)
+	return `"sha256-` + hex.EncodeToString(sum[:]) + `"`
+}
+
+func certificateNotModified(w http.ResponseWriter, r *http.Request, bundle *certstore.CertBundle) bool {
+	etag := certificateETag(bundle)
+	if etag == "" {
+		return false
+	}
+	w.Header().Set("ETag", etag)
+	for _, candidate := range strings.Split(r.Header.Get("If-None-Match"), ",") {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "*" || candidate == etag || strings.TrimPrefix(candidate, "W/") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return true
+		}
+	}
+	return false
+}
+
+func writeCertificateJSON(w http.ResponseWriter, r *http.Request, addr netip.Addr, bundle *certstore.CertBundle) {
+	if certificateNotModified(w, r, bundle) {
+		return
+	}
+	writeJSON(w, http.StatusOK, certResponse(addr, bundle))
 }
 
 type statusPageData struct {
@@ -461,8 +497,16 @@ func writePending(w http.ResponseWriter, retryAfter int) {
 // writeError writes a JSON error response. For 5xx errors, sets
 // Retry-After: 3600 to signal clients to back off for one hour.
 func writeError(w http.ResponseWriter, status int, message string) {
+	writeErrorRetry(w, status, message, 0)
+}
+
+func writeErrorRetry(w http.ResponseWriter, status int, message string, retryAfter time.Duration) {
 	if status >= 500 {
-		w.Header().Set("Retry-After", "3600")
+		seconds := int(retryAfter.Seconds())
+		if seconds <= 0 {
+			seconds = 3600
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(seconds))
 	}
 	writeJSON(w, status, map[string]string{"error": message})
 }

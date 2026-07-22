@@ -57,7 +57,7 @@ curl https://lancert.dev/certs/192.168.1.50
 
 ```bash
 go build -o lancert ./cmd/lancert/
-./lancert -server-ip <PUBLIC_IP> [-staging] [-email you@example.com]
+./lancert -server-ip <PUBLIC_IP> [-acme-env staging] [-email you@example.com]
 ```
 
 ### Flags
@@ -69,7 +69,7 @@ go build -o lancert ./cmd/lancert/
 | `-http-addr` | `:8443` | HTTP listen address (behind reverse proxy) |
 | `-data-dir` | `data` | Data directory for certs and keys |
 | `-email` | | Email for Let's Encrypt account |
-| `-staging` | `false` | Use Let's Encrypt staging |
+| `-acme-env` | `production` | ACME authority: `production`, `staging`, or `local` (Pebble) |
 | `-pregen` | `false` | Pre-generate certificates for common IPs at startup |
 
 ### Local development with mise
@@ -84,9 +84,11 @@ mise run dev
 ```
 
 The dev task uses `./data` for local data and writes binaries to `./bin`.
-It binds DNS to `127.0.0.1:1053`,
-uses HTTP on `127.0.0.1:8443`, and always targets the Let's Encrypt staging
-environment. Production settings must be provided separately.
+It starts a local Pebble ACME server and Lancert through the `.mise/Procfile`,
+binds DNS to `127.0.0.1:1053`, and uses HTTP on `127.0.0.1:8443`. `mise run
+setup` generates a short-lived local TLS CA and key with mkcert under
+`.mise/pebble/`; these files are ignored by Git.
+No public DNS or Let's Encrypt account is required for local issuance.
 
 ## Supported IPs
 

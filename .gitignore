@@ -6,3 +6,10 @@ certs/
 .env
 .DS_Store
 bin/
+.mise/pebble/*.pem
+.mise/pebble/*-key.pem
+.mise/pebble/*.crt
+.mise/pebble/*.key
+.mise/pebble/*.csr
+.mise/pebble/*.ext
+.mise/pebble/*.srl

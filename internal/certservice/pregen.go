@@ -72,7 +72,7 @@ func (s *Service) Pregen(ctx context.Context) {
 			continue
 		}
 
-		if bundle != nil && time.Until(bundle.Meta.NotAfter) > RenewalWindow {
+		if bundle != nil && time.Until(bundle.Meta.NotAfter) > 0 {
 			skipped++
 			continue
 		}

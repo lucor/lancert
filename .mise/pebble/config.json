@@ -1,0 +1,16 @@
+{
+  "pebble": {
+    "listenAddress": "127.0.0.1:14000",
+    "managementListenAddress": "127.0.0.1:15000",
+    "certificate": ".mise/pebble/localhost.crt",
+    "privateKey": ".mise/pebble/localhost.key",
+    "httpPort": 5002,
+    "tlsPort": 5001,
+    "ocspResponderURL": "",
+    "externalAccountBindingRequired": false,
+    "retryAfter": {"authz": 1, "order": 1},
+    "profiles": {
+      "default": {"description": "local lancert development", "validityPeriod": 7776000}
+    }
+  }
+}

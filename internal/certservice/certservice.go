@@ -15,14 +15,13 @@
 // a 5xx error (issuance failed), or it gives up. This decouples the HTTP
 // request lifetime from the ACME flow entirely.
 //
-// # On-demand model
+// # On-demand and ARI model
 //
-// There is no background renewal loop. Renewal is lazy: GetOrIssue checks the
-// stored certificate on every call and re-issues if less than 30 days remain
-// (RenewalWindow). The renewal code path is identical to first-time issuance —
-// a new ACME order is placed and a new keypair is generated. GetOrIssue is
-// used internally by backgroundIssue and Pregen; it is not called directly
-// by HTTP handlers.
+// On-demand issuance happens only when a certificate is absent or expired.
+// Unexpired certificates remain servable through NotAfter. A single lifecycle
+// worker handles ARI scheduling and performs replacements with replaces set to
+// the current leaf certificate ID. RenewalWindow is used only as the fallback
+// scheduling interval, not as a serving cutoff.
 //
 // # Per-certificate keypair
 //
@@ -36,11 +35,10 @@
 //
 // # Background issuance
 //
-// backgroundIssue runs in a goroutine with context.Background() and a hard
-// timeout (issuanceTimeout = 12 minutes). Using the request context would be
-// wrong: the client may disconnect or the proxy may cancel the request long
-// before the ACME flow completes, which would cancel the in-flight job and
-// leave the issue map stuck in "pending" with no recovery path.
+// backgroundIssue runs in a goroutine with an independent hard timeout
+// (issuanceTimeout = 12 minutes). Using the request context would be wrong:
+// the client may disconnect or the proxy may cancel the request long before
+// the ACME flow completes.
 //
 // singleflight deduplicates concurrent triggers for the same IP (e.g. Pregen
 // and an API request racing at startup). Only one ACME call fires per IP
@@ -60,15 +58,6 @@
 // holds at most one entry per recently-requested IP, so a background sweeper
 // would add complexity with no practical benefit.
 //
-// # Issuance budget
-//
-// A rolling 7-day counter enforces a local limit (default 40) well below Let's
-// Encrypt's 50 certificates/week/domain cap. BudgetExhausted is a read-only
-// precheck used by handlers to reject requests early; the real atomic gate is
-// budget.allow() inside issue(), which runs after singleflight deduplication.
-// This means concurrent triggers for the same IP consume only one token, not
-// one per caller.
-//
 // # Pre-generation
 //
 // Pregen issues certificates for a curated list of common private IPs at
@@ -79,26 +68,24 @@
 // # Storage
 //
 // Certificates are stored on disk (one directory per IP) and survive restarts.
-// The store holds the private key PEM, the full certificate chain PEM, and a
-// metadata file (domains, issuance date, expiry) used for renewal decisions and
-// TTL queries.
+// Each current certificate is an atomic versioned bundle containing the key,
+// chain, certificate metadata, and ARI scheduling state. Legacy three-file
+// directories are migrated eagerly at startup.
 package certservice
 
 import (
 	"context"
 	"crypto/ecdsa"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/netip"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
-	"golang.org/x/crypto/acme"
+	ariacme "github.com/mholt/acmez/v3/acme"
 	"golang.org/x/sync/singleflight"
 
 	acmeissue "lucor.dev/lancert/internal/acme"
@@ -111,33 +98,24 @@ const (
 	// RenewalWindow triggers renewal when a certificate has less than this
 	// remaining. Certificates inside this window are not served from cache.
 	RenewalWindow = 30 * 24 * time.Hour
-
-	// budgetWindow is the rolling window for the issuance budget.
-	// Let's Encrypt allows ~50 new certs per registered domain per week.
-	budgetWindow = 7 * 24 * time.Hour
-
-	// defaultBudgetLimit is a safe default well below the LE limit of 50.
-	defaultBudgetLimit = 40
 )
-
-// ErrBudgetExhausted is returned when the weekly issuance budget is spent.
-var ErrBudgetExhausted = errors.New("weekly certificate issuance budget exhausted")
 
 // Config holds the service configuration.
 type Config struct {
 	Zone        string
 	Email       string
 	AccountKey  *ecdsa.PrivateKey
-	Staging     bool
-	BudgetLimit int    // max new certs per budgetWindow; 0 = defaultBudgetLimit
-	DataDir     string // directory for persisting budget state (e.g. "data")
+	Environment acmeissue.Environment
+	CACertPath  string
+	Resolver    *net.Resolver
 }
 
 // failRecord holds information about a failed issuance attempt.
 type failRecord struct {
-	err    error
-	status int       // HTTP status code for the failure
-	at     time.Time // when the failure occurred
+	err        error
+	status     int           // HTTP status code for the failure
+	at         time.Time     // when the failure occurred
+	retryAfter time.Duration // upstream retry delay, when available
 }
 
 // failureCooldown is how long a failure record is surfaced before expiring.
@@ -158,8 +136,9 @@ type IssueStatus struct {
 
 // FailInfo exposes failure details to the handler layer.
 type FailInfo struct {
-	Status int    // HTTP status code
-	Msg    string // error message
+	Status     int           // HTTP status code
+	Msg        string        // error message
+	RetryAfter time.Duration // retry delay, when available
 }
 
 // issuanceTimeout is the context timeout for background issuance goroutines.
@@ -173,32 +152,20 @@ type Service struct {
 	store    *certstore.Store
 	txtStore dnssrv.TXTHandler
 	sfGroup  singleflight.Group // deduplicates concurrent issuance for the same IP
-	budget   *issuanceBudget
 
 	mu     sync.Mutex
 	issues map[string]*issueRecord
 }
 
-// New creates a certificate service. If cfg.DataDir is set, the issuance
-// budget is loaded from disk so that restarts do not reset the LE rate
-// limit counter.
+// New creates a certificate service.
 func New(cfg Config, store *certstore.Store, txtStore dnssrv.TXTHandler) *Service {
-	limit := cfg.BudgetLimit
-	if limit == 0 {
-		limit = defaultBudgetLimit
+	if cfg.Environment == "" {
+		cfg.Environment = acmeissue.EnvironmentProduction
 	}
-
-	budget := &issuanceBudget{limit: int64(limit)}
-	if cfg.DataDir != "" {
-		budget.path = filepath.Join(cfg.DataDir, "budget.json")
-		budget.load()
-	}
-
 	return &Service{
 		config:   cfg,
 		store:    store,
 		txtStore: txtStore,
-		budget:   budget,
 		issues:   make(map[string]*issueRecord),
 	}
 }
@@ -211,7 +178,7 @@ func (s *Service) GetOrIssue(ctx context.Context, addr netip.Addr) (*certstore.C
 	if err != nil {
 		return nil, fmt.Errorf("load cert: %w", err)
 	}
-	if bundle != nil && time.Until(bundle.Meta.NotAfter) > RenewalWindow {
+	if bundle != nil && time.Until(bundle.Meta.NotAfter) > 0 {
 		slog.Debug("certservice: cache hit", "addr", addr, "expires", bundle.Meta.NotAfter.Format(time.DateOnly))
 		return bundle, nil
 	}
@@ -226,7 +193,7 @@ func (s *Service) GetOrIssue(ctx context.Context, addr netip.Addr) (*certstore.C
 	return v.(*certstore.CertBundle), nil
 }
 
-// issue performs the double-check, budget gate, ACME issuance, and disk write.
+// issue performs the double-check, ACME issuance, and disk write.
 // Called exclusively from GetOrIssue inside the singleflight group.
 func (s *Service) issue(ctx context.Context, addr netip.Addr) (*certstore.CertBundle, error) {
 	// Double-check: a previous in-flight call may have just issued and stored.
@@ -234,29 +201,22 @@ func (s *Service) issue(ctx context.Context, addr netip.Addr) (*certstore.CertBu
 	if err != nil {
 		return nil, fmt.Errorf("load cert: %w", err)
 	}
-	if bundle != nil && time.Until(bundle.Meta.NotAfter) > RenewalWindow {
+	if bundle != nil && time.Until(bundle.Meta.NotAfter) > 0 {
 		slog.Debug("certservice: cache hit after dedup", "addr", addr)
 		return bundle, nil
-	}
-
-	// Consume a budget token before issuing. Checked here rather than before
-	// the double-check so that concurrent waiters for the same IP do not each
-	// burn a token — only the one that actually issues does.
-	if !s.budget.allow() {
-		slog.Warn("certservice: budget exhausted", "resets_in", s.budget.resetIn().Round(time.Minute))
-		return nil, ErrBudgetExhausted
 	}
 
 	domains := privateip.Domains(addr, s.config.Zone)
 	slog.Info("certservice: issuing cert", "addr", addr, "domains", domains)
 
 	result, err := acmeissue.Issue(ctx, acmeissue.Request{
-		Domains:    domains[:],
-		Email:      s.config.Email,
-		AccountKey: s.config.AccountKey,
-		Staging:    s.config.Staging,
-		TXTStore:   s.txtStore,
-		Resolver:   nil, // system default; follows NS delegation to our authoritative DNS
+		Domains:     domains[:],
+		Email:       s.config.Email,
+		AccountKey:  s.config.AccountKey,
+		TXTStore:    s.txtStore,
+		Resolver:    s.config.Resolver,
+		Environment: s.config.Environment,
+		CACertPath:  s.config.CACertPath,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("issue cert for %s: %w", addr, err)
@@ -276,24 +236,16 @@ func (s *Service) TTL(addr netip.Addr) time.Duration {
 	return s.store.TTL(addr)
 }
 
-// LoadUsable returns the stored certificate only if it is usable
-// (i.e. has more than RenewalWindow remaining). Returns nil, nil
-// if no certificate exists or it needs renewal.
+// LoadUsable returns the current stored certificate while it is unexpired.
 func (s *Service) LoadUsable(addr netip.Addr) (*certstore.CertBundle, error) {
 	bundle, err := s.store.Load(addr)
 	if err != nil {
 		return nil, fmt.Errorf("load cert: %w", err)
 	}
-	if bundle != nil && time.Until(bundle.Meta.NotAfter) > RenewalWindow {
+	if bundle != nil && time.Until(bundle.Meta.NotAfter) > 0 {
 		return bundle, nil
 	}
 	return nil, nil
-}
-
-// BudgetExhausted returns true if the issuance budget is spent without
-// consuming a token. Used by handlers for a quick precheck.
-func (s *Service) BudgetExhausted() bool {
-	return s.budget.exhausted()
 }
 
 // TriggerIssuance starts a background issuance goroutine for addr if one
@@ -312,7 +264,7 @@ func (s *Service) TriggerIssuance(addr netip.Addr) IssueStatus {
 		}
 		// Existing failure record — check if still in cooldown.
 		if rec.fail != nil && time.Since(rec.fail.at) < failureCooldown {
-			return IssueStatus{Fail: &FailInfo{Status: rec.fail.status, Msg: rec.fail.err.Error()}}
+			return IssueStatus{Fail: &FailInfo{Status: rec.fail.status, Msg: rec.fail.err.Error(), RetryAfter: rec.fail.retryAfter}}
 		}
 		// Expired failure — fall through to re-trigger.
 	}
@@ -357,7 +309,7 @@ func (s *Service) GetStatus(addr netip.Addr) (IssueStatus, error) {
 			s.mu.Unlock()
 			return IssueStatus{}, nil
 		}
-		return IssueStatus{Fail: &FailInfo{Status: rec.fail.status, Msg: rec.fail.err.Error()}}, nil
+		return IssueStatus{Fail: &FailInfo{Status: rec.fail.status, Msg: rec.fail.err.Error(), RetryAfter: rec.fail.retryAfter}}, nil
 	}
 
 	return IssueStatus{}, nil
@@ -383,9 +335,10 @@ func (s *Service) backgroundIssue(addr netip.Addr, key string) {
 		slog.Error("certservice: background issue failed", "addr", addr, "error", err)
 		s.issues[key] = &issueRecord{
 			fail: &failRecord{
-				err:    err,
-				status: classifyIssueError(err),
-				at:     time.Now().UTC(),
+				err:        err,
+				status:     classifyIssueError(err),
+				at:         time.Now().UTC(),
+				retryAfter: retryAfter(err),
 			},
 		}
 		return
@@ -398,123 +351,22 @@ func (s *Service) backgroundIssue(addr netip.Addr, key string) {
 
 // classifyIssueError maps an issuance error to an HTTP status code.
 func classifyIssueError(err error) int {
-	if errors.Is(err, ErrBudgetExhausted) {
-		return http.StatusServiceUnavailable // 503
+	if errors.Is(err, acmeissue.ErrRateLimited) {
+		return http.StatusServiceUnavailable
 	}
 	if errors.Is(err, acmeissue.ErrPropagationTimeout) {
 		return http.StatusGatewayTimeout // 504
 	}
-	var authErr *acme.AuthorizationError
-	if errors.As(err, &authErr) {
-		return http.StatusBadGateway // 502
+	var problem ariacme.Problem
+	if errors.As(err, &problem) {
+		// ACME authorization and identifier failures are upstream validation
+		// failures, not Lancert server faults.
+		if (problem.Status >= http.StatusBadRequest && problem.Status < http.StatusInternalServerError) ||
+			problem.Type == ariacme.ProblemTypeUnauthorized ||
+			problem.Type == ariacme.ProblemTypeMalformed ||
+			problem.Type == ariacme.ProblemTypeRejectedIdentifier {
+			return http.StatusBadGateway // 502
+		}
 	}
 	return http.StatusInternalServerError // 500
-}
-
-// issuanceBudget tracks how many new certificates have been issued in the
-// current rolling window. Protects the Let's Encrypt rate limit regardless
-// of how many source IPs hit the API. When path is set, the counter is
-// persisted to disk so that restarts do not reset it.
-type issuanceBudget struct {
-	mu          sync.Mutex
-	limit       int64
-	count       int64
-	windowStart int64  // unix seconds
-	path        string // file path for persistence; empty = in-memory only
-}
-
-// budgetState is the JSON-serializable form of the budget counter.
-type budgetState struct {
-	Count       int64 `json:"count"`
-	WindowStart int64 `json:"window_start"`
-}
-
-// load restores the budget from disk. Errors are logged and ignored —
-// a missing or corrupt file simply starts a fresh window.
-func (b *issuanceBudget) load() {
-	if b.path == "" {
-		return
-	}
-	data, err := os.ReadFile(b.path)
-	if err != nil {
-		return
-	}
-	var s budgetState
-	if err := json.Unmarshal(data, &s); err != nil {
-		slog.Warn("budget: ignoring corrupt state file", "path", b.path, "error", err)
-		return
-	}
-	// Only restore the rolling window if it has not expired.
-	if time.Now().Unix()-s.WindowStart <= int64(budgetWindow.Seconds()) {
-		b.count = s.Count
-		b.windowStart = s.WindowStart
-		slog.Info("budget: restored from disk", "count", b.count, "window_start", time.Unix(b.windowStart, 0).Format(time.RFC3339))
-	}
-}
-
-// save persists the current budget state to disk. Best-effort.
-func (b *issuanceBudget) save() {
-	if b.path == "" {
-		return
-	}
-	data, _ := json.Marshal(budgetState{Count: b.count, WindowStart: b.windowStart})
-	if err := os.WriteFile(b.path, data, 0o600); err != nil {
-		slog.Warn("budget: failed to persist state", "path", b.path, "error", err)
-	}
-}
-
-// exhausted returns true if the budget is spent, without consuming a token.
-func (b *issuanceBudget) exhausted() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	now := time.Now().Unix()
-	if now-b.windowStart > int64(budgetWindow.Seconds()) {
-		return false // window expired, budget has reset
-	}
-	return b.count >= b.limit
-}
-
-// allow checks whether an issuance is permitted. Returns false if the
-// budget is exhausted. Increments the counter on success and persists to disk.
-func (b *issuanceBudget) allow() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	now := time.Now().Unix()
-
-	// Reset window if expired
-	if now-b.windowStart > int64(budgetWindow.Seconds()) {
-		b.windowStart = now
-		b.count = 1
-		b.save()
-		return true
-	}
-
-	if b.count >= b.limit {
-		return false
-	}
-
-	b.count++
-	b.save()
-	return true
-}
-
-// resetIn returns the duration until the current budget window resets.
-func (b *issuanceBudget) resetIn() time.Duration {
-	b.mu.Lock()
-	start := b.windowStart
-	b.mu.Unlock()
-
-	if start == 0 {
-		return 0
-	}
-
-	end := time.Unix(start, 0).Add(budgetWindow)
-	remaining := time.Until(end)
-	if remaining < 0 {
-		return 0
-	}
-
-	return remaining
 }

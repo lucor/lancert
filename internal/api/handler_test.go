@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	acmeissue "lucor.dev/lancert/internal/acme"
 	"lucor.dev/lancert/internal/certservice"
 	"lucor.dev/lancert/internal/certstore"
 	"lucor.dev/lancert/internal/dnssrv"
@@ -25,7 +26,7 @@ func newTestHandler(t *testing.T) *Handler {
 	txtStore := dnssrv.NewTXTStore()
 
 	svc := certservice.New(
-		certservice.Config{Zone: "lancert.dev", Staging: true},
+		certservice.Config{Zone: "lancert.dev", Environment: acmeissue.EnvironmentStaging},
 		store,
 		txtStore,
 	)
@@ -49,7 +50,7 @@ func TestHealth(t *testing.T) {
 
 func TestStatus(t *testing.T) {
 	store := certstore.New(t.TempDir())
-	svc := certservice.New(certservice.Config{Zone: "lancert.dev", Staging: true}, store, dnssrv.NewTXTStore())
+	svc := certservice.New(certservice.Config{Zone: "lancert.dev", Environment: acmeissue.EnvironmentStaging}, store, dnssrv.NewTXTStore())
 	h := New(svc, func() metrics.Snapshot {
 		return metrics.Snapshot{Queries24H: 12, WriteAttempts24H: 10, WriteSuccesses24H: 9, RecentQueries: 2, RecentWindow: time.Minute, ResponseP95: 2 * time.Millisecond, DailyLookups: []metrics.DailyLookup{{Date: "2026-07-20", Queries: 4}, {Date: "2026-07-21", Queries: 12}}, TrackingComplete: true, ActiveTargets30D: 3, ActivePrefixes30D: 2, Readiness: metrics.Readiness{Available: true, Total: 3, Ready: 2}}
 	})

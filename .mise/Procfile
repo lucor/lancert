@@ -1,0 +1,2 @@
+pebble: PEBBLE_VA_NOSLEEP=1 pebble -config .mise/pebble/config.json -dnsserver "$LANCERT_DNS_ADDR"
+api: air -c .air.toml

@@ -8,15 +8,14 @@
 //	  200  certificate bundle (cert already cached and usable)
 //	  202  issuance triggered, poll GET (Retry-After: 10)
 //	  400  invalid or non-RFC-1918 IP
-//	  503  weekly issuance budget exhausted
 //
 //	GET /certs/{ip}
-//	  200  certificate bundle (issuance complete)
+//	  200  certificate bundle (issuance complete, with ETag)
+//	  304  certificate unchanged when If-None-Match matches
 //	  202  issuance in progress, keep polling (Retry-After: 10)
 //	  404  never requested
 //	  500  internal error during issuance
 //	  502  ACME authorization failure (LE rejected the challenge)
-//	  503  weekly issuance budget exhausted
 //	  504  DNS propagation timeout (TXT record not visible within 5 min)
 //	  5xx responses also include Retry-After: 3600
 //
@@ -30,6 +29,8 @@
 //	GET /health
 //	  200  {"status": "ok"}
 //
-// "Usable" means the certificate has more than 30 days remaining. Certs inside
-// the renewal window are treated as missing and trigger a new issuance.
+// A certificate remains usable until its NotAfter; renewal is handled by the
+// background ARI worker rather than by ordinary reads.
+// Certificate JSON and PEM responses support stable leaf-derived ETags and
+// conditional retrieval with If-None-Match.
 package api
