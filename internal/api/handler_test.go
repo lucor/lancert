@@ -29,6 +29,7 @@ func newTestHandler(t *testing.T) *Handler {
 		certservice.Config{Zone: "lancert.dev", Environment: acmeissue.EnvironmentStaging},
 		store,
 		txtStore,
+		metrics.Disabled{},
 	)
 
 	return New(svc, nil)
@@ -50,20 +51,41 @@ func TestHealth(t *testing.T) {
 
 func TestStatus(t *testing.T) {
 	store := certstore.New(t.TempDir())
-	svc := certservice.New(certservice.Config{Zone: "lancert.dev", Environment: acmeissue.EnvironmentStaging}, store, dnssrv.NewTXTStore())
+	svc := certservice.New(certservice.Config{Zone: "lancert.dev", Environment: acmeissue.EnvironmentStaging}, store, dnssrv.NewTXTStore(), metrics.Disabled{})
 	h := New(svc, func() metrics.Snapshot {
-		return metrics.Snapshot{Queries24H: 12, WriteAttempts24H: 10, WriteSuccesses24H: 9, RecentQueries: 2, RecentWindow: time.Minute, ResponseP95: 2 * time.Millisecond, DailyLookups: []metrics.DailyLookup{{Date: "2026-07-20", Queries: 4}, {Date: "2026-07-21", Queries: 12}}, TrackingComplete: true, ActiveTargets30D: 3, ActivePrefixes30D: 2, Readiness: metrics.Readiness{Available: true, Total: 3, Ready: 2}}
+		return metrics.Snapshot{Queries24H: 12, WriteAttempts24H: 10, WriteSuccesses24H: 9, RecentQueries: 2, RecentWindow: time.Minute, ResponseP95: 2 * time.Millisecond, DailyLookups: []metrics.DailyLookup{{Date: "2026-07-20", Queries: 4}, {Date: "2026-07-21", Queries: 12}}, TrackingComplete: true, ActiveTargets30D: 3, ActivePrefixes30D: 2, Readiness: metrics.Readiness{Available: true, Total: 3, Ready: 2}, CertificateLifecycle: metrics.CertificateLifecycle{RecordedSince: time.Date(2026, 7, 23, 0, 0, 0, 0, time.UTC), InitialIssuances: 7, Renewals: 3, ARIRenewals: 2, TotalIssued: 10, ARIAdoption: 66.666, HasARIAdoption: true}}
 	})
 	req := httptest.NewRequest(http.MethodGet, "/status", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "Local address activity")
-	assert.Contains(t, rec.Body.String(), "Certificate cache")
-	assert.Contains(t, rec.Body.String(), "Ready to serve")
-	assert.Contains(t, rec.Body.String(), "3 certificates cached · 1 not ready")
+	assert.Contains(t, rec.Body.String(), "Certificates")
+	assert.Contains(t, rec.Body.String(), "Certificates cached")
+	assert.Contains(t, rec.Body.String(), "Total certificates issued")
+	assert.Contains(t, rec.Body.String(), "ARI renewal activity")
+	assert.Contains(t, rec.Body.String(), "2 of 3 renewals")
+	assert.Contains(t, rec.Body.String(), "66.7%")
+	assert.NotContains(t, rec.Body.String(), "Recorded since")
+	assert.Contains(t, rec.Body.String(), "Serving certificates since 23 Jul 2026.")
 	assert.Contains(t, rec.Body.String(), "Lookup trend")
 	assert.Contains(t, rec.Body.String(), "21 Jul: 12 lookups")
+}
+
+func TestStatusWithoutRenewals(t *testing.T) {
+	store := certstore.New(t.TempDir())
+	svc := certservice.New(certservice.Config{Zone: "lancert.dev", Environment: acmeissue.EnvironmentStaging}, store, dnssrv.NewTXTStore(), metrics.Disabled{})
+	h := New(svc, func() metrics.Snapshot {
+		return metrics.Snapshot{Readiness: metrics.Readiness{Available: true}, CertificateLifecycle: metrics.CertificateLifecycle{TotalIssued: 2}}
+	})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/status", nil))
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "<strong>—</strong>")
+	assert.Contains(t, rec.Body.String(), "Not available")
+	assert.Contains(t, rec.Body.String(), "No certificate renewals have been recorded yet.")
+	assert.NotContains(t, rec.Body.String(), "aria-label=\"ARI adoption\"")
 }
 
 func TestAssets(t *testing.T) {

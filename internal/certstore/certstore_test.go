@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"math/big"
 	"net/netip"
@@ -71,6 +72,77 @@ func TestStore_LoadMissing(t *testing.T) {
 	bundle, err := store.Load(addr)
 	assert.NoError(t, err)
 	assert.Nil(t, bundle)
+}
+
+func TestStore_LoadRejectsTamperedBundle(t *testing.T) {
+	baseDir := t.TempDir()
+	store := New(baseDir)
+	addr := netip.MustParseAddr("192.168.1.50")
+	privKey, certDER := generateTestCert(t, []string{"192-168-1-50.lancert.dev"})
+	require.NoError(t, store.Save(addr, privKey, [][]byte{certDER}))
+
+	path := filepath.Join(baseDir, "192-168-1-50", bundleFile)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var stored persistedBundle
+	require.NoError(t, json.Unmarshal(data, &stored))
+	stored.Meta.NotAfter = stored.Meta.NotAfter.Add(24 * time.Hour)
+	data, err = json.Marshal(stored)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, data, filePerm))
+
+	bundle, err := store.Load(addr)
+	assert.Nil(t, bundle)
+	assert.ErrorContains(t, err, "metadata does not match")
+}
+
+func TestStore_LoadRejectsUnsafeBundlePermissions(t *testing.T) {
+	baseDir := t.TempDir()
+	store := New(baseDir)
+	addr := netip.MustParseAddr("192.168.1.50")
+	privKey, certDER := generateTestCert(t, []string{"192-168-1-50.lancert.dev"})
+	require.NoError(t, store.Save(addr, privKey, [][]byte{certDER}))
+
+	path := filepath.Join(baseDir, "192-168-1-50", bundleFile)
+	require.NoError(t, os.Chmod(path, 0o644))
+	bundle, err := store.Load(addr)
+	assert.Nil(t, bundle)
+	assert.ErrorContains(t, err, "permissions")
+}
+
+func TestStore_LoadRejectsBundleSymlink(t *testing.T) {
+	baseDir := t.TempDir()
+	store := New(baseDir)
+	addr := netip.MustParseAddr("192.168.1.50")
+	dir := filepath.Join(baseDir, "192-168-1-50")
+	require.NoError(t, os.MkdirAll(dir, dirPerm))
+	target := filepath.Join(baseDir, "elsewhere.json")
+	require.NoError(t, os.WriteFile(target, []byte("{}"), filePerm))
+	require.NoError(t, os.Symlink(target, filepath.Join(dir, bundleFile)))
+
+	bundle, err := store.Load(addr)
+	assert.Nil(t, bundle)
+	assert.ErrorContains(t, err, "regular file")
+}
+
+func TestStore_LoadRejectsLegacySymlink(t *testing.T) {
+	baseDir := t.TempDir()
+	store := New(baseDir)
+	addr := netip.MustParseAddr("192.168.1.50")
+	privKey, certDER := generateTestCert(t, []string{"192-168-1-50.lancert.dev"})
+	dir := filepath.Join(baseDir, "192-168-1-50")
+	require.NoError(t, os.MkdirAll(dir, dirPerm))
+	chain := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	require.NoError(t, os.WriteFile(filepath.Join(dir, privkeyFile), privKey, filePerm))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, fullchainFile), chain, filePerm))
+	meta := []byte(`{"domains":["192-168-1-50.lancert.dev"],"issued_at":"2026-01-01T00:00:00Z","not_after":"2027-01-01T00:00:00Z"}`)
+	target := filepath.Join(baseDir, "legacy-meta.json")
+	require.NoError(t, os.WriteFile(target, meta, filePerm))
+	require.NoError(t, os.Symlink(target, filepath.Join(dir, metaFile)))
+
+	bundle, err := store.Load(addr)
+	assert.Nil(t, bundle)
+	assert.ErrorContains(t, err, "regular file")
 }
 
 func TestStore_TTL(t *testing.T) {

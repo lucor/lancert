@@ -17,8 +17,8 @@
 //	      ├─ Initiate challenge                 ← notify LE to validate
 //	      └─ Poll authorization                 ← poll until authz valid
 //	   GenerateKey (P256) + CSR
-//	   WaitOrder                                ← order → "ready"
-//	   CreateOrderCert                          ← finalize, get chain
+//	   FinalizeOrder                            ← order → "valid"
+//	   GetCertificateChain                      ← download the chain
 //	   defer: cleanup TXT records
 package acme
 
@@ -27,7 +27,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -36,16 +35,12 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	acmez "github.com/mholt/acmez/v3"
 	ariacme "github.com/mholt/acmez/v3/acme"
-	"golang.org/x/crypto/acme"
 
 	"lucor.dev/lancert/internal/dnssrv"
 )
@@ -60,49 +55,73 @@ var ErrRateLimited = errors.New("ACME rate limit exceeded")
 // ErrAlreadyReplaced identifies a predecessor that the CA already replaced.
 var ErrAlreadyReplaced = errors.New("ACME certificate already replaced")
 
-// RateLimitError preserves the upstream Retry-After duration.
+// RateLimitError preserves the absolute time supplied by Retry-After.
 type RateLimitError struct {
-	Err        error
-	RetryAfter time.Duration
+	Err     error
+	RetryAt time.Time
 }
 
-func (e *RateLimitError) Error() string                     { return e.Err.Error() }
-func (e *RateLimitError) Unwrap() error                     { return e.Err }
-func (e *RateLimitError) RetryAfterDuration() time.Duration { return e.RetryAfter }
+// Error returns the underlying ACME problem text.
+func (e *RateLimitError) Error() string { return e.Err.Error() }
+
+// Unwrap exposes the underlying ACME problem for errors.Is and errors.As.
+func (e *RateLimitError) Unwrap() error { return e.Err }
+
+// RetryAfterDuration returns the remaining upstream retry delay.
+func (e *RateLimitError) RetryAfterDuration() time.Duration {
+	return max(time.Until(e.RetryAt), 0)
+}
+
+// RetryAfterTime returns the absolute upstream retry time.
+func (e *RateLimitError) RetryAfterTime() time.Time { return e.RetryAt }
 
 type retryCaptureTransport struct {
-	base  http.RoundTripper
-	mu    sync.Mutex
-	retry time.Duration
+	base    http.RoundTripper
+	mu      sync.Mutex
+	retryAt time.Time
 }
 
+// RoundTrip records an absolute Retry-After instant while forwarding req.
 func (t *retryCaptureTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := t.base.RoundTrip(req)
 	if resp != nil {
+		var retryAt time.Time
 		if value := resp.Header.Get("Retry-After"); value != "" {
-			var d time.Duration
 			if seconds, parseErr := strconv.Atoi(value); parseErr == nil {
-				d = time.Duration(seconds) * time.Second
+				retryAt = time.Now().Add(time.Duration(seconds) * time.Second)
 			} else if when, parseErr := http.ParseTime(value); parseErr == nil {
-				d = time.Until(when)
-			}
-			if d > 0 {
-				t.mu.Lock()
-				t.retry = d
-				t.mu.Unlock()
+				retryAt = when
 			}
 		}
+		if !retryAt.After(time.Now()) {
+			retryAt = time.Time{}
+		}
+		t.mu.Lock()
+		t.retryAt = retryAt.UTC()
+		t.mu.Unlock()
 	}
 	return resp, err
 }
 
-func (t *retryCaptureTransport) retryAfter() time.Duration {
+// reset clears Retry-After state before an operation that may be rate limited.
+func (t *retryCaptureTransport) reset() {
+	t.mu.Lock()
+	t.retryAt = time.Time{}
+	t.mu.Unlock()
+}
+
+// retryAfterTime returns the most recently observed Retry-After instant.
+func (t *retryCaptureTransport) retryAfterTime() time.Time {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.retry
+	return t.retryAt
 }
 
 const (
+	// acmeHTTPTimeout bounds one HTTP exchange. The operation context still
+	// controls the larger issuance or renewal workflow.
+	acmeHTTPTimeout = 30 * time.Second
+
 	letsEncryptProduction = "https://acme-v02.api.letsencrypt.org/directory"
 	letsEncryptStaging    = "https://acme-staging-v02.api.letsencrypt.org/directory"
 
@@ -136,11 +155,9 @@ const (
 	EnvironmentProduction Environment = "production"
 	EnvironmentStaging    Environment = "staging"
 	EnvironmentLocal      Environment = "local"
-	LocalDirectoryURL                 = "https://127.0.0.1:14000/dir"
 )
 
-const defaultLocalCACert = ".mise/pebble/rootCA.pem"
-
+// directoryFor returns the directory endpoint for env.
 func directoryFor(env Environment) (string, error) {
 	if env == "" {
 		env = EnvironmentProduction
@@ -151,27 +168,14 @@ func directoryFor(env Environment) (string, error) {
 	case EnvironmentStaging:
 		return letsEncryptStaging, nil
 	case EnvironmentLocal:
-		return LocalDirectoryURL, nil
+		return PebbleDirectoryURL, nil
 	default:
 		return "", fmt.Errorf("invalid ACME environment %q", env)
 	}
 }
 
-func localHTTPClient(caPath string) (*http.Client, error) {
-	if caPath == "" {
-		caPath = defaultLocalCACert
-	}
-	data, err := os.ReadFile(filepath.Clean(caPath))
-	if err != nil {
-		return nil, fmt.Errorf("read Pebble CA certificate %q: %w", caPath, err)
-	}
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(data) {
-		return nil, fmt.Errorf("parse Pebble CA certificate %q", caPath)
-	}
-	return &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}}, nil
-}
-
+// httpClientFor builds the authority-specific HTTP client and optional
+// Retry-After capture transport.
 func httpClientFor(env Environment, caPath string, captureRetry bool) (*http.Client, *retryCaptureTransport, error) {
 	base := http.DefaultTransport
 	if env == EnvironmentLocal {
@@ -182,10 +186,10 @@ func httpClientFor(env Environment, caPath string, captureRetry bool) (*http.Cli
 		base = client.Transport
 	}
 	if !captureRetry {
-		return &http.Client{Transport: base}, nil, nil
+		return &http.Client{Transport: base, Timeout: acmeHTTPTimeout}, nil, nil
 	}
 	transport := &retryCaptureTransport{base: base}
-	return &http.Client{Transport: transport}, transport, nil
+	return &http.Client{Transport: transport, Timeout: acmeHTTPTimeout}, transport, nil
 }
 
 // Request holds the parameters for certificate issuance.
@@ -219,6 +223,9 @@ type RenewalInfo struct {
 
 // GetRenewalInfo fetches ARI for a currently stored leaf certificate.
 func GetRenewalInfo(ctx context.Context, leaf *x509.Certificate, env Environment, caPath string) (RenewalInfo, error) {
+	if leaf == nil {
+		return RenewalInfo{}, fmt.Errorf("leaf certificate is required")
+	}
 	directoryURL, err := directoryFor(env)
 	if err != nil {
 		return RenewalInfo{}, err
@@ -239,6 +246,7 @@ func GetRenewalInfo(ctx context.Context, leaf *x509.Certificate, env Environment
 	}, nil
 }
 
+// derefTime normalizes an optional ACME timestamp to UTC.
 func derefTime(t *time.Time) time.Time {
 	if t == nil {
 		return time.Time{}
@@ -248,9 +256,19 @@ func derefTime(t *time.Time) time.Time {
 
 // Issue performs the ACME DNS-01 flow using the low-level ARI-capable client.
 func Issue(ctx context.Context, req Request) (*Result, error) {
+	if len(req.Domains) == 0 {
+		return nil, fmt.Errorf("at least one domain is required")
+	}
+	if req.AccountKey == nil {
+		return nil, fmt.Errorf("ACME account key is required")
+	}
+	if req.TXTStore == nil {
+		return nil, fmt.Errorf("DNS TXT store is required")
+	}
 	return issueLowLevel(ctx, req)
 }
 
+// issueLowLevel performs issuance with the ARI-capable low-level ACME client.
 func issueLowLevel(ctx context.Context, req Request) (*Result, error) {
 	directoryURL, err := directoryFor(req.Environment)
 	if err != nil {
@@ -285,12 +303,13 @@ func issueLowLevel(ctx context.Context, req Request) (*Result, error) {
 			return nil, fmt.Errorf("derive predecessor certificate ID: %w", err)
 		}
 	}
+	transport.reset()
 	order, err = client.NewOrder(ctx, account, order)
 	if err != nil {
 		var problem ariacme.Problem
 		if errors.As(err, &problem) {
 			if problem.Type == ariacme.ProblemTypeRateLimited {
-				return nil, &RateLimitError{Err: fmt.Errorf("%w: %v", ErrRateLimited, err), RetryAfter: transport.retryAfter()}
+				return nil, &RateLimitError{Err: fmt.Errorf("%w: %v", ErrRateLimited, err), RetryAt: transport.retryAfterTime()}
 			}
 			if problem.Type == ariacme.ProblemTypeAlreadyReplaced {
 				return nil, fmt.Errorf("%w: %v", ErrAlreadyReplaced, err)
@@ -298,17 +317,11 @@ func issueLowLevel(ctx context.Context, req Request) (*Result, error) {
 		}
 		return nil, fmt.Errorf("create ACME order: %w", err)
 	}
-	solver := &dnsSolver{store: req.TXTStore, resolver: req.Resolver, cleanups: make(map[string]dnssrv.CleanupFunc)}
+	solver := &dnsSolver{store: req.TXTStore, resolver: req.Resolver, cleanups: make(map[string][]dnssrv.CleanupFunc)}
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 		defer cancel()
-		for name, cleanup := range solver.cleanups {
-			if cleanup != nil {
-				if err := cleanup(cleanupCtx); err != nil {
-					slog.Warn("acme: DNS cleanup failed", "name", name, "error", err)
-				}
-			}
-		}
+		solver.cleanupAll(cleanupCtx)
 	}()
 	for _, authzURL := range order.Authorizations {
 		authz, err := client.GetAuthorization(ctx, account, authzURL)
@@ -372,77 +385,14 @@ func issueLowLevel(ctx context.Context, req Request) (*Result, error) {
 	return &Result{PrivKeyPEM: pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), CertChainDER: chainDER}, nil
 }
 
-func issueHighLevel(ctx context.Context, req Request) (*Result, error) {
-	directoryURL := letsEncryptProduction
-	solver := &dnsSolver{store: req.TXTStore, resolver: req.Resolver, cleanups: make(map[string]dnssrv.CleanupFunc)}
-	transport := &retryCaptureTransport{base: http.DefaultTransport}
-	client := &acmez.Client{
-		Client:           &ariacme.Client{Directory: directoryURL, HTTPClient: &http.Client{Transport: transport}},
-		ChallengeSolvers: map[string]acmez.Solver{ariacme.ChallengeTypeDNS01: solver},
-	}
-	account := ariacme.Account{PrivateKey: req.AccountKey}
-	if req.Email != "" {
-		account.Contact = []string{"mailto:" + req.Email}
-	}
-	registered, err := client.NewAccount(ctx, account)
-	if err != nil {
-		registered, err = client.GetAccount(ctx, account)
-		if err != nil {
-			return nil, fmt.Errorf("register or load ACME account: %w", err)
-		}
-	} else {
-		slog.Info("acme: registered account")
-	}
-
-	certKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return nil, fmt.Errorf("generate certificate key: %w", err)
-	}
-	csr, err := acmez.NewCSR(certKey, req.Domains)
-	if err != nil {
-		return nil, fmt.Errorf("create CSR: %w", err)
-	}
-	params, err := acmez.OrderParametersFromCSR(registered, csr)
-	if err != nil {
-		return nil, fmt.Errorf("create ACME order parameters: %w", err)
-	}
-	params.Replaces = req.Replaces
-	chains, err := client.ObtainCertificate(ctx, params)
-	if err != nil {
-		var problem ariacme.Problem
-		if errors.As(err, &problem) {
-			if problem.Type == ariacme.ProblemTypeRateLimited {
-				wrapped := &RateLimitError{Err: fmt.Errorf("%w: %v", ErrRateLimited, err), RetryAfter: transport.retryAfter()}
-				return nil, wrapped
-			}
-			if problem.Type == ariacme.ProblemTypeAlreadyReplaced {
-				return nil, fmt.Errorf("%w: %v", ErrAlreadyReplaced, err)
-			}
-		}
-		return nil, fmt.Errorf("obtain certificate: %w", err)
-	}
-	if len(chains) == 0 || len(chains[0].ChainPEM) == 0 {
-		return nil, fmt.Errorf("ACME returned no certificate chain")
-	}
-	chainDER, err := parsePEMChain(chains[0].ChainPEM)
-	if err != nil {
-		return nil, err
-	}
-	keyDER, err := x509.MarshalECPrivateKey(certKey)
-	if err != nil {
-		return nil, fmt.Errorf("marshal certificate key: %w", err)
-	}
-	slog.Info("acme: certificate issued", "domains", req.Domains, "replaced", req.Replaces != nil)
-	return &Result{PrivKeyPEM: pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), CertChainDER: chainDER}, nil
-}
-
 type dnsSolver struct {
 	store    dnssrv.TXTHandler
 	resolver *net.Resolver
 	mu       sync.Mutex
-	cleanups map[string]dnssrv.CleanupFunc
+	cleanups map[string][]dnssrv.CleanupFunc
 }
 
+// Present publishes the DNS-01 TXT value and retains its exact cleanup callback.
 func (s *dnsSolver) Present(ctx context.Context, challenge ariacme.Challenge) error {
 	name := challenge.DNS01TXTRecordName() + "."
 	cleanup, err := s.store.SetTXTWithCleanup(ctx, name, challenge.DNS01KeyAuthorization(), txtRecordTTL)
@@ -450,27 +400,32 @@ func (s *dnsSolver) Present(ctx context.Context, challenge ariacme.Challenge) er
 		return err
 	}
 	s.mu.Lock()
-	s.cleanups[name] = cleanup
+	s.cleanups[name] = append(s.cleanups[name], cleanup)
 	s.mu.Unlock()
 	return nil
 }
 
+// Wait blocks until the published DNS-01 TXT value is visible.
 func (s *dnsSolver) Wait(ctx context.Context, challenge ariacme.Challenge) error {
 	return waitForPropagation(ctx, s.resolver, challenge.DNS01TXTRecordName()+".", challenge.DNS01KeyAuthorization())
 }
 
-func (s *dnsSolver) CleanUp(ctx context.Context, challenge ariacme.Challenge) error {
-	name := challenge.DNS01TXTRecordName() + "."
+// cleanupAll removes every TXT value left behind by an interrupted flow.
+func (s *dnsSolver) cleanupAll(ctx context.Context) {
 	s.mu.Lock()
-	cleanup := s.cleanups[name]
-	delete(s.cleanups, name)
+	cleanups := s.cleanups
+	s.cleanups = make(map[string][]dnssrv.CleanupFunc)
 	s.mu.Unlock()
-	if cleanup == nil {
-		return nil
+	for name, callbacks := range cleanups {
+		for _, cleanup := range callbacks {
+			if err := cleanup(ctx); err != nil {
+				slog.Warn("acme: DNS cleanup failed", "name", name, "error", err)
+			}
+		}
 	}
-	return cleanup(ctx)
 }
 
+// parsePEMChain validates and returns every certificate in a PEM chain.
 func parsePEMChain(data []byte) ([][]byte, error) {
 	var chain [][]byte
 	for rest := data; len(rest) > 0; {
@@ -490,158 +445,6 @@ func parsePEMChain(data []byte) ([][]byte, error) {
 		return nil, fmt.Errorf("ACME certificate chain is empty")
 	}
 	return chain, nil
-}
-
-// issueLegacy is retained temporarily for comparison while the ARI client is
-// exercised; it is not used by the service.
-func issueLegacy(ctx context.Context, req Request) (*Result, error) {
-	directoryURL := letsEncryptProduction
-
-	client := &acme.Client{
-		Key:          req.AccountKey,
-		DirectoryURL: directoryURL,
-	}
-
-	acct := &acme.Account{}
-	if req.Email != "" {
-		acct.Contact = []string{"mailto:" + req.Email}
-	}
-
-	// Register always — the ACME spec requires this call for account lookup by
-	// key. ErrAccountAlreadyExists is the expected happy-path response for
-	// returning clients; it is not an error.
-	if _, err := client.Register(ctx, acct, acme.AcceptTOS); err != nil {
-		if err != acme.ErrAccountAlreadyExists {
-			return nil, fmt.Errorf("register account: %w", err)
-		}
-		slog.Info("using existing ACME account")
-	} else {
-		slog.Info("registered new ACME account")
-	}
-
-	order, err := client.AuthorizeOrder(ctx, acme.DomainIDs(req.Domains...))
-	if err != nil {
-		return nil, fmt.Errorf("authorize order: %w", err)
-	}
-
-	slog.Info("order created", "domains", req.Domains, "status", order.Status)
-
-	var cleanups []dnssrv.CleanupFunc
-
-	defer func() {
-		// Use a fresh context: the parent ctx is likely cancelled by the time
-		// this defer runs (error path, timeout, or shutdown signal). Reusing it
-		// would silently skip cleanup, leaving stale TXT records in the DNS
-		// store that would interfere with future challenge flows.
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
-		defer cancel()
-
-		for _, cleanup := range cleanups {
-			if err := cleanup(cleanupCtx); err != nil {
-				slog.Warn("cleanup failed", "error", err)
-			}
-		}
-	}()
-
-	for _, authzURL := range order.AuthzURLs {
-		authz, err := client.GetAuthorization(ctx, authzURL)
-		if err != nil {
-			return nil, fmt.Errorf("get authorization: %w", err)
-		}
-
-		if authz.Status == acme.StatusValid {
-			slog.Info("authorization already valid", "domain", authz.Identifier.Value)
-			continue
-		}
-
-		var chal *acme.Challenge
-		for _, c := range authz.Challenges {
-			if c.Type == "dns-01" {
-				chal = c
-				break
-			}
-		}
-
-		if chal == nil {
-			return nil, fmt.Errorf("no dns-01 challenge found for %s", authz.Identifier.Value)
-		}
-
-		txtValue, err := client.DNS01ChallengeRecord(chal.Token)
-		if err != nil {
-			return nil, fmt.Errorf("compute dns-01 record: %w", err)
-		}
-
-		fqdn := "_acme-challenge." + authz.Identifier.Value + "."
-
-		slog.Info("presenting dns-01 challenge", "fqdn", fqdn)
-
-		cleanup, err := req.TXTStore.SetTXTWithCleanup(ctx, fqdn, txtValue, txtRecordTTL)
-		if err != nil {
-			return nil, fmt.Errorf("present challenge for %s: %w", authz.Identifier.Value, err)
-		}
-		cleanups = append(cleanups, cleanup)
-
-		// Confirm propagation before calling Accept. LE validates the TXT record
-		// immediately on Accept — if it is not visible yet, the challenge fails
-		// permanently and the order cannot be retried.
-		if err := waitForPropagation(ctx, req.Resolver, fqdn, txtValue); err != nil {
-			return nil, fmt.Errorf("dns propagation for %s: %w", authz.Identifier.Value, err)
-		}
-
-		if _, err := client.Accept(ctx, chal); err != nil {
-			return nil, fmt.Errorf("accept challenge for %s: %w", authz.Identifier.Value, err)
-		}
-
-		if _, err := client.WaitAuthorization(ctx, authzURL); err != nil {
-			return nil, fmt.Errorf("wait authorization for %s: %w", authz.Identifier.Value, err)
-		}
-
-		slog.Info("authorization valid", "domain", authz.Identifier.Value)
-	}
-
-	// P256 is broadly supported by LE and all major TLS clients. P384 would
-	// also be accepted but adds no practical security benefit for 90-day certs.
-	certKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return nil, fmt.Errorf("generate certificate key: %w", err)
-	}
-
-	csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
-		Subject:  pkix.Name{CommonName: req.Domains[0]},
-		DNSNames: req.Domains,
-	}, certKey)
-	if err != nil {
-		return nil, fmt.Errorf("create CSR: %w", err)
-	}
-
-	// The order transitions to "ready" only after all authorizations are valid.
-	// Finalizing before that state returns an error from LE.
-	order, err = client.WaitOrder(ctx, order.URI)
-	if err != nil {
-		return nil, fmt.Errorf("wait order: %w", err)
-	}
-
-	certChainDER, _, err := client.CreateOrderCert(ctx, order.FinalizeURL, csr, true)
-	if err != nil {
-		return nil, fmt.Errorf("create order cert: %w", err)
-	}
-
-	slog.Info("certificate issued", "domains", req.Domains)
-
-	keyDER, err := x509.MarshalECPrivateKey(certKey)
-	if err != nil {
-		return nil, fmt.Errorf("marshal certificate key: %w", err)
-	}
-
-	privKeyPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "EC PRIVATE KEY",
-		Bytes: keyDER,
-	})
-
-	return &Result{
-		PrivKeyPEM:   privKeyPEM,
-		CertChainDER: certChainDER,
-	}, nil
 }
 
 // waitForPropagation polls DNS until the expected TXT value appears under fqdn.

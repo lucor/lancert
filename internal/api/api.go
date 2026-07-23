@@ -20,7 +20,7 @@
 //	  5xx responses also include Retry-After: 3600
 //
 //	GET /certs/{ip}/ttl
-//	  200  remaining validity in seconds and human-readable form
+//	  200  remaining validity in seconds as plain text
 //	  404  no certificate on disk for this IP
 //
 //	GET /status

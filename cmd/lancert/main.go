@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/netip"
 	"os"
@@ -36,6 +35,7 @@ const (
 	defaultHTTPAddr = ":8443"
 )
 
+// main runs lancert and reports fatal startup errors.
 func main() {
 	if err := run(); err != nil {
 		slog.Error("fatal", "error", err)
@@ -109,6 +109,15 @@ func run() error {
 		slog.Error("metrics unavailable", "error", metricOpenErr)
 	} else {
 		metricRecorder = metricStore
+		entries, inventoryErr := store.Inventory()
+		if inventoryErr != nil {
+			slog.Error("certificate lifecycle baseline unavailable", "error", inventoryErr)
+		} else {
+			issued, since := certificateLifecycleBaseline(entries)
+			if err := metricStore.InitializeCertificateLifecycle(context.Background(), issued, since); err != nil {
+				slog.Error("certificate lifecycle baseline unavailable", "error", err)
+			}
+		}
 	}
 	defer func() {
 		if metricStore != nil {
@@ -127,17 +136,9 @@ func run() error {
 		zone += "."
 	}
 	bareZone := zone[:len(zone)-1] // e.g. "lancert.dev"
-	var resolver *net.Resolver
-	caCertPath := ""
-	if environment == acmeissue.EnvironmentLocal {
-		caCertPath = filepath.Join(".mise", "pebble", "rootCA.pem")
-		host, port, splitErr := net.SplitHostPort(dnsAddr)
-		if splitErr != nil {
-			return fmt.Errorf("local ACME requires LANCERT_DNS_ADDR with host and port: %w", splitErr)
-		}
-		resolver = &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort(host, port))
-		}}
+	resolver, caCertPath, err := acmeRuntimeConfig(environment, dnsAddr)
+	if err != nil {
+		return err
 	}
 
 	// DNS TXT challenge store
@@ -168,6 +169,7 @@ func run() error {
 		},
 		store,
 		txtStore,
+		metricRecorder,
 	)
 
 	// Trusted proxy subnet for X-Forwarded-For extraction.
@@ -312,6 +314,7 @@ func run() error {
 	return nil
 }
 
+// readinessFromInventory derives service readiness from stored certificates.
 func readinessFromInventory(entries []certstore.InventoryEntry, now time.Time) metrics.Readiness {
 	readiness := metrics.Readiness{Available: true}
 	for _, entry := range entries {
@@ -325,11 +328,25 @@ func readinessFromInventory(entries []certstore.InventoryEntry, now time.Time) m
 			}
 			continue
 		}
-		if entry.Ready && entry.Meta.NotAfter.Sub(now) > certservice.RenewalWindow {
+		if entry.Ready && entry.Meta.NotAfter.After(now) {
 			readiness.Ready++
 		}
 	}
 	return readiness
+}
+
+func certificateLifecycleBaseline(entries []certstore.InventoryEntry) (uint64, time.Time) {
+	var count uint64
+	var since time.Time
+	for _, entry := range entries {
+		if entry.Ready && entry.Addr.IsValid() {
+			count++
+			if !entry.Meta.IssuedAt.IsZero() && (since.IsZero() || entry.Meta.IssuedAt.Before(since)) {
+				since = entry.Meta.IssuedAt
+			}
+		}
+	}
+	return count, since
 }
 
 // envOr returns the value of the environment variable key, or fallback if unset/empty.

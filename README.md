@@ -90,6 +90,12 @@ setup` generates a short-lived local TLS CA and key with mkcert under
 `.mise/pebble/`; these files are ignored by Git.
 No public DNS or Let's Encrypt account is required for local issuance.
 
+Run the local end-to-end ACME and ARI flow separately from the unit suite:
+
+```bash
+mise run e2e
+```
+
 ## Supported IPs
 
 Only RFC 1918 private IPv4 addresses:

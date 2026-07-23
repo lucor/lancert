@@ -53,6 +53,7 @@ func (s *Store) MigrateLegacy() error {
 	return nil
 }
 
+// parseLegacyDirName converts a legacy dashed directory name to an address.
 func parseLegacyDirName(name string) (netip.Addr, error) {
 	// Reuse the same private-IP parser used by Inventory without importing
 	// service-level validation rules into the store.

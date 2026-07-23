@@ -44,6 +44,7 @@ var assetsFS embed.FS
 
 var assetsHandler http.Handler
 
+// init parses the embedded status page template once at startup.
 func init() {
 	sub, err := fs.Sub(assetsFS, "static/assets")
 	if err != nil {
@@ -52,6 +53,7 @@ func init() {
 	assetsHandler = http.StripPrefix("/assets", http.FileServer(http.FS(sub)))
 }
 
+// serveAssets serves embedded static files with explicit content types.
 func serveAssets(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/assets/" {
 		http.NotFound(w, r)
@@ -194,7 +196,12 @@ func (h *Handler) handleGetTTL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ttl := h.service.TTL(addr)
+	ttl, err := h.service.TTL(addr)
+	if err != nil {
+		slog.Error("api: get certificate TTL error", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to read certificate")
+		return
+	}
 	if ttl == 0 {
 		writeError(w, http.StatusNotFound, "no certificate found for this IP")
 		return
@@ -278,6 +285,7 @@ func (h *Handler) servePEM(w http.ResponseWriter, r *http.Request, kind string) 
 	writeError(w, http.StatusNotFound, "no certificate found for this IP")
 }
 
+// certificateETag returns a strong digest of the leaf certificate.
 func certificateETag(bundle *certstore.CertBundle) string {
 	block, _ := pem.Decode(bundle.FullChainPEM)
 	if block == nil {
@@ -290,6 +298,7 @@ func certificateETag(bundle *certstore.CertBundle) string {
 	return `"sha256-` + hex.EncodeToString(sum[:]) + `"`
 }
 
+// certificateNotModified handles If-None-Match for a certificate response.
 func certificateNotModified(w http.ResponseWriter, r *http.Request, bundle *certstore.CertBundle) bool {
 	etag := certificateETag(bundle)
 	if etag == "" {
@@ -306,6 +315,7 @@ func certificateNotModified(w http.ResponseWriter, r *http.Request, bundle *cert
 	return false
 }
 
+// writeCertificateJSON writes a cache-aware certificate response.
 func writeCertificateJSON(w http.ResponseWriter, r *http.Request, addr netip.Addr, bundle *certstore.CertBundle) {
 	if certificateNotModified(w, r, bundle) {
 		return
@@ -315,18 +325,26 @@ func writeCertificateJSON(w http.ResponseWriter, r *http.Request, addr netip.Add
 
 type statusPageData struct {
 	metrics.Snapshot
-	SuccessPercent    string
-	RecentLookups     string
-	RecentPeriod      string
-	ResponseP95       string
-	LastUpdated       string
-	ReadyCertificates string
-	CacheContext      string
-	LookupChart       []lookupChartBar
-	ChartStart        string
-	ChartEnd          string
-	ChartMax          uint64
-	HasLookupData     bool
+	SuccessPercent           string
+	RecentLookups            string
+	RecentPeriod             string
+	ResponseP95              string
+	LastUpdated              string
+	CertificatesCached       string
+	TotalCertificatesIssued  string
+	CertificatesRenewed      string
+	ARIAdoption              string
+	ARIRenewalSummary        string
+	ARIAdoptionDetail        string
+	HasARIActivity           bool
+	ARIRenewalCount          uint64
+	RenewalCount             uint64
+	ServingCertificatesSince string
+	LookupChart              []lookupChartBar
+	ChartStart               string
+	ChartEnd                 string
+	ChartMax                 uint64
+	HasLookupData            bool
 }
 
 type lookupChartBar struct {
@@ -337,17 +355,21 @@ type lookupChartBar struct {
 	Queries uint64
 }
 
+// handleStatus renders the public aggregate service status page.
 func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s := h.snapshot()
 	data := statusPageData{
-		Snapshot:          s,
-		SuccessPercent:    "Not available",
-		RecentLookups:     strconv.FormatUint(s.RecentQueries, 10),
-		RecentPeriod:      "Last 5 minutes",
-		ResponseP95:       "Not available",
-		LastUpdated:       "Not available",
-		ReadyCertificates: "Unavailable",
-		CacheContext:      "Certificate cache unavailable",
+		Snapshot:                s,
+		SuccessPercent:          "Not available",
+		RecentLookups:           strconv.FormatUint(s.RecentQueries, 10),
+		RecentPeriod:            "Last 5 minutes",
+		ResponseP95:             "Not available",
+		LastUpdated:             "Not available",
+		CertificatesCached:      "Unavailable",
+		TotalCertificatesIssued: "Unavailable",
+		CertificatesRenewed:     "Unavailable",
+		ARIAdoption:             "Unavailable",
+		ARIAdoptionDetail:       "Certificate metrics unavailable",
 	}
 	data.LookupChart, data.ChartStart, data.ChartEnd, data.ChartMax, data.HasLookupData = buildLookupChart(s.DailyLookups)
 	if !s.FreshAt.IsZero() {
@@ -357,10 +379,26 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 		data.SuccessPercent = fmt.Sprintf("%.1f%%", float64(s.WriteSuccesses24H)*100/float64(s.WriteAttempts24H))
 	}
 	if s.Readiness.Available {
-		data.ReadyCertificates = strconv.FormatUint(s.Readiness.Ready, 10)
-		data.CacheContext = fmt.Sprintf("%d certificates cached", s.Readiness.Total)
-		if notReady := s.Readiness.Total - min(s.Readiness.Ready, s.Readiness.Total); notReady > 0 {
-			data.CacheContext += fmt.Sprintf(" · %d not ready", notReady)
+		data.CertificatesCached = strconv.FormatUint(s.Readiness.Ready, 10)
+	}
+	if !s.Unavailable {
+		lifecycle := s.CertificateLifecycle
+		data.TotalCertificatesIssued = strconv.FormatUint(lifecycle.TotalIssued, 10)
+		data.CertificatesRenewed = strconv.FormatUint(lifecycle.Renewals, 10)
+		data.ARIRenewalCount = lifecycle.ARIRenewals
+		data.RenewalCount = lifecycle.Renewals
+		if !lifecycle.RecordedSince.IsZero() {
+			data.ServingCertificatesSince = lifecycle.RecordedSince.Format("2 Jan 2006")
+		}
+		if lifecycle.HasARIAdoption {
+			data.ARIAdoption = fmt.Sprintf("%.1f%%", lifecycle.ARIAdoption)
+			data.ARIRenewalSummary = fmt.Sprintf("%d of %d renewals", lifecycle.ARIRenewals, lifecycle.Renewals)
+			data.ARIAdoptionDetail = "Renewals initiated using ACME Renewal Information."
+			data.HasARIActivity = true
+		} else {
+			data.ARIAdoption = "—"
+			data.ARIRenewalSummary = "Not available"
+			data.ARIAdoptionDetail = "No certificate renewals have been recorded yet."
 		}
 	}
 	if s.RecentWindow < 5*time.Minute {
@@ -379,6 +417,7 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// buildLookupChart converts daily lookup totals into status-page chart bars.
 func buildLookupChart(days []metrics.DailyLookup) ([]lookupChartBar, string, string, uint64, bool) {
 	if len(days) == 0 {
 		return nil, "", "", 0, false
@@ -404,6 +443,7 @@ func buildLookupChart(days []metrics.DailyLookup) ([]lookupChartBar, string, str
 	return bars, chartDateLabel(days[0].Date), chartDateLabel(days[len(days)-1].Date), maxQueries, maxQueries > 0
 }
 
+// chartDateLabel formats an ISO date for the compact chart axis.
 func chartDateLabel(date string) string {
 	t, err := time.Parse(time.DateOnly, date)
 	if err != nil {
@@ -427,6 +467,7 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// analyticsHost reports whether hostport is the public analytics hostname.
 func analyticsHost(hostport string) bool {
 	host := hostport
 	if parsed, _, err := net.SplitHostPort(hostport); err == nil {
@@ -500,6 +541,7 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeErrorRetry(w, status, message, 0)
 }
 
+// writeErrorRetry writes an error response with an optional Retry-After header.
 func writeErrorRetry(w http.ResponseWriter, status int, message string, retryAfter time.Duration) {
 	if status >= 500 {
 		seconds := int(retryAfter.Seconds())

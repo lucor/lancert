@@ -3,12 +3,10 @@
 //
 // # Async issuance model
 //
-// ACME DNS-01 issuance takes up to 12 minutes (two serial authorizations, each
-// with up to 5 minutes of propagation polling, plus finalization overhead).
-// lancert is deployed behind a reverse proxy (Traefik/Dokploy) that has its own
-// request timeout — blocking a POST for 12 minutes would cause the proxy to
-// return a 504 to the client, leaving the cert on disk with no way to retrieve
-// it through the normal response.
+// ACME DNS-01 issuance can take several minutes (two serial authorizations,
+// each with up to 5 minutes of propagation polling, plus finalization
+// overhead). HTTP clients or intermediaries may enforce a shorter request
+// timeout, so blocking a POST for the entire ACME flow is not reliable.
 //
 // To avoid this, the API is fire-and-forget: POST triggers background issuance
 // and returns 202 immediately. The client polls GET until 200 (cert ready),
@@ -91,12 +89,14 @@ import (
 	acmeissue "lucor.dev/lancert/internal/acme"
 	"lucor.dev/lancert/internal/certstore"
 	"lucor.dev/lancert/internal/dnssrv"
+	"lucor.dev/lancert/internal/metrics"
 	"lucor.dev/lancert/internal/privateip"
 )
 
 const (
 	// RenewalWindow triggers renewal when a certificate has less than this
-	// remaining. Certificates inside this window are not served from cache.
+	// remaining. Certificates inside this window remain servable while renewal
+	// proceeds in the background.
 	RenewalWindow = 30 * 24 * time.Hour
 )
 
@@ -151,6 +151,7 @@ type Service struct {
 	config   Config
 	store    *certstore.Store
 	txtStore dnssrv.TXTHandler
+	metrics  metrics.Recorder
 	sfGroup  singleflight.Group // deduplicates concurrent issuance for the same IP
 
 	mu     sync.Mutex
@@ -158,7 +159,7 @@ type Service struct {
 }
 
 // New creates a certificate service.
-func New(cfg Config, store *certstore.Store, txtStore dnssrv.TXTHandler) *Service {
+func New(cfg Config, store *certstore.Store, txtStore dnssrv.TXTHandler, recorder metrics.Recorder) *Service {
 	if cfg.Environment == "" {
 		cfg.Environment = acmeissue.EnvironmentProduction
 	}
@@ -166,6 +167,7 @@ func New(cfg Config, store *certstore.Store, txtStore dnssrv.TXTHandler) *Servic
 		config:   cfg,
 		store:    store,
 		txtStore: txtStore,
+		metrics:  recorder,
 		issues:   make(map[string]*issueRecord),
 	}
 }
@@ -205,6 +207,7 @@ func (s *Service) issue(ctx context.Context, addr netip.Addr) (*certstore.CertBu
 		slog.Debug("certservice: cache hit after dedup", "addr", addr)
 		return bundle, nil
 	}
+	previous := bundle != nil
 
 	domains := privateip.Domains(addr, s.config.Zone)
 	slog.Info("certservice: issuing cert", "addr", addr, "domains", domains)
@@ -228,12 +231,40 @@ func (s *Service) issue(ctx context.Context, addr netip.Addr) (*certstore.CertBu
 
 	slog.Info("certservice: cert issued and stored", "addr", addr)
 
-	return s.store.Load(addr)
+	fresh, err := s.store.Load(addr)
+	if err != nil {
+		return nil, err
+	}
+	if fresh == nil {
+		return nil, fmt.Errorf("stored cert for %s could not be reloaded", addr)
+	}
+	var recordErr error
+	if previous {
+		recordErr = s.metrics.RecordRenewal(ctx, false)
+	} else {
+		recordErr = s.metrics.RecordInitialIssuance(ctx)
+	}
+	if recordErr != nil {
+		slog.Warn("certservice: lifecycle metric unavailable", "addr", addr, "error", recordErr)
+	}
+	return fresh, nil
 }
 
 // TTL returns the remaining validity for the given IP.
-func (s *Service) TTL(addr netip.Addr) time.Duration {
-	return s.store.TTL(addr)
+// A zero duration with nil error means the certificate is absent or expired.
+func (s *Service) TTL(addr netip.Addr) (time.Duration, error) {
+	bundle, err := s.store.Load(addr)
+	if err != nil {
+		return 0, err
+	}
+	if bundle == nil {
+		return 0, nil
+	}
+	ttl := time.Until(bundle.Meta.NotAfter)
+	if ttl <= 0 {
+		return 0, nil
+	}
+	return ttl, nil
 }
 
 // LoadUsable returns the current stored certificate while it is unexpired.

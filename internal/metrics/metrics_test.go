@@ -55,6 +55,56 @@ func TestDateOfNormalizesNonUTCTime(t *testing.T) {
 	require.Equal(t, "2026-07-21", dateOf(local))
 }
 
+func TestCertificateLifecyclePersistsAndDerivesAdoption(t *testing.T) {
+	now := time.Date(2026, 7, 24, 10, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "metrics.db")
+	s, err := Open(path, WithClock(func() time.Time { return now }), WithoutBackground())
+	require.NoError(t, err)
+	require.NoError(t, s.RecordInitialIssuance(context.Background()))
+	require.NoError(t, s.RecordRenewal(context.Background(), false))
+	require.NoError(t, s.RecordRenewal(context.Background(), true))
+	require.NoError(t, s.RebuildSnapshot(context.Background()))
+	lifecycle := s.Snapshot().CertificateLifecycle
+	require.Equal(t, now, lifecycle.RecordedSince)
+	require.Equal(t, uint64(1), lifecycle.InitialIssuances)
+	require.Equal(t, uint64(2), lifecycle.Renewals)
+	require.Equal(t, uint64(1), lifecycle.ARIRenewals)
+	require.Equal(t, uint64(3), lifecycle.TotalIssued)
+	require.True(t, lifecycle.HasARIAdoption)
+	require.InDelta(t, 50.0, lifecycle.ARIAdoption, 0.001)
+	require.NoError(t, s.Close(context.Background()))
+
+	s, err = Open(path, WithClock(func() time.Time { return now.Add(time.Hour) }), WithoutBackground())
+	require.NoError(t, err)
+	require.Equal(t, now, s.Snapshot().CertificateLifecycle.RecordedSince)
+	require.Equal(t, uint64(3), s.Snapshot().CertificateLifecycle.TotalIssued)
+	require.NoError(t, s.Close(context.Background()))
+}
+
+func TestCertificateLifecycleAdoptionUnavailableWithoutRenewals(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "metrics.db"), WithoutBackground())
+	require.NoError(t, err)
+	lifecycle := s.Snapshot().CertificateLifecycle
+	require.False(t, lifecycle.HasARIAdoption)
+	require.NoError(t, s.Close(context.Background()))
+}
+
+func TestInitializeCertificateLifecycleSeedsOnlyOnce(t *testing.T) {
+	now := time.Date(2026, 7, 24, 10, 0, 0, 0, time.UTC)
+	s, err := Open(filepath.Join(t.TempDir(), "metrics.db"), WithClock(func() time.Time { return now }), WithoutBackground())
+	require.NoError(t, err)
+	require.NoError(t, s.InitializeCertificateLifecycle(context.Background(), 4, time.Time{}))
+	lifecycle := s.Snapshot().CertificateLifecycle
+	require.Equal(t, now, lifecycle.RecordedSince)
+	require.Equal(t, uint64(4), lifecycle.InitialIssuances)
+
+	now = now.Add(time.Hour)
+	require.NoError(t, s.InitializeCertificateLifecycle(context.Background(), 99, now))
+	require.Equal(t, uint64(4), s.Snapshot().CertificateLifecycle.InitialIssuances)
+	require.Equal(t, time.Date(2026, 7, 24, 10, 0, 0, 0, time.UTC), s.Snapshot().CertificateLifecycle.RecordedSince)
+	require.NoError(t, s.Close(context.Background()))
+}
+
 func TestRetentionAndIncompletePropagation(t *testing.T) {
 	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
 	s, err := Open(filepath.Join(t.TempDir(), "metrics.db"), WithClock(func() time.Time { return now }), WithoutBackground())

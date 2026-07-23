@@ -73,7 +73,6 @@
     h2 { margin-bottom: 0; color: var(--ink); font-size: 22px; letter-spacing: -.025em; }
     .section-heading p { margin-bottom: 0; color: var(--muted); }
     .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
-    .cards.compact { max-width: 500px; }
     .card { min-height: 154px; padding: 24px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
     .card-label { margin-bottom: 12px; color: var(--muted); font-size: 13px; font-weight: 650; }
     .value { margin-bottom: 5px; color: var(--ink); font-size: clamp(26px, 4vw, 36px); font-weight: 740; line-height: 1.1; letter-spacing: -.035em; }
@@ -97,6 +96,16 @@
     progress::-webkit-progress-value { background: var(--cert); border-radius: 99px; }
     progress::-moz-progress-bar { background: var(--cert); border-radius: 99px; }
 
+    .certificate-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .ari-panel { margin-top: 12px; padding: 20px 24px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+    .ari-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+    .ari-header h3 { margin-bottom: 3px; }
+    .ari-header p { margin: 0; color: var(--muted); font-size: 13px; }
+    .ari-value { flex: 0 0 auto; text-align: right; }
+    .ari-value strong { display: block; color: var(--ink); font-size: 22px; line-height: 1.2; letter-spacing: -.025em; }
+    .ari-value span { color: var(--muted); font-size: 12px; }
+    .ari-panel progress { margin-top: 16px; }
+
     .tables { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px; }
     h3 { margin-bottom: 6px; color: var(--ink); font-size: 15px; }
     .table-note { min-height: 42px; margin-bottom: 12px; color: var(--muted); font-size: 13px; }
@@ -118,7 +127,11 @@
       h1 { font-size: 38px; }
       .section-heading { grid-template-columns: 1fr; gap: 8px; }
       .cards, .tables { grid-template-columns: 1fr; }
+      .certificate-cards { grid-template-columns: 1fr; }
       .card { min-height: 0; }
+      .ari-panel { padding: 20px; }
+      .ari-header { align-items: flex-start; flex-direction: column; gap: 12px; }
+      .ari-value { text-align: left; }
       .chart-panel { padding: 20px; }
       .lookup-chart svg { height: 140px; }
       .table-note { min-height: 0; }
@@ -222,19 +235,41 @@
         </div>
       </section>
 
-      <section aria-labelledby="cache-heading">
+      <section aria-labelledby="certificates-heading">
         <div class="section-heading">
-          <h2 id="cache-heading">Certificate cache</h2>
-          <p>Certificates stored by lancert and available without a new Let’s Encrypt request.</p>
+          <h2 id="certificates-heading">Certificates</h2>
+          <p>Certificate availability and successful issuance activity.</p>
         </div>
-        <div class="cards compact">
+        <div class="cards certificate-cards">
           <article class="card">
-            <div class="card-label">Ready to serve</div>
-            <div class="value">{{.ReadyCertificates}}</div>
-            <p class="context">{{.CacheContext}}</p>
-            {{if and .Snapshot.Readiness.Available .Snapshot.Readiness.Total}}<progress value="{{.Snapshot.Readiness.Ready}}" max="{{.Snapshot.Readiness.Total}}" aria-label="Certificates ready"></progress>{{end}}
+            <div class="card-label">Certificates cached</div>
+            <div class="value">{{.CertificatesCached}}</div>
+            <p class="context">Available without a new Let’s Encrypt request</p>
+          </article>
+          <article class="card">
+            <div class="card-label">Total certificates issued</div>
+            <div class="value">{{.TotalCertificatesIssued}}</div>
+            <p class="context">Includes initial issuances and renewals</p>
+          </article>
+          <article class="card">
+            <div class="card-label">Certificates renewed</div>
+            <div class="value">{{.CertificatesRenewed}}</div>
+            <p class="context">Successful replacements of existing certificates</p>
           </article>
         </div>
+        <article class="ari-panel">
+          <div class="ari-header">
+            <div>
+              <h3>ARI renewal activity</h3>
+              <p>{{.ARIAdoptionDetail}}</p>
+            </div>
+            <div class="ari-value">
+              <strong>{{.ARIAdoption}}</strong>
+              <span>{{.ARIRenewalSummary}}</span>
+            </div>
+          </div>
+          {{if .HasARIActivity}}<progress value="{{.ARIRenewalCount}}" max="{{.RenewalCount}}" aria-label="ARI adoption"></progress>{{end}}
+        </article>
       </section>
 
       <section aria-labelledby="activity-heading">
@@ -272,6 +307,7 @@
     <footer>
       <p>This page tracks DNS activity and certificate readiness. DNS lookups reflect resolver activity, not people or devices.</p>
       <p>A DNS response means an address was resolved. It does not guarantee that a certificate exists.</p>
+      {{if .ServingCertificatesSince}}<p>Serving certificates since {{.ServingCertificatesSince}}.</p>{{end}}
     </footer>
   </div>
 </body>

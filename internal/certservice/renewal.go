@@ -18,6 +18,9 @@ import (
 )
 
 const (
+	// renewalPollInterval keeps renewal starts close to ARI's selected RenewAt.
+	// The worker only reads local certificate bundles while schedules are idle;
+	// lancert is expected to manage a small set of private-address certificates.
 	renewalPollInterval = time.Minute
 	ariErrorRetry       = 6 * time.Hour
 	renewalFailureRetry = time.Hour
@@ -28,6 +31,7 @@ func (s *Service) StartRenewalWorker(ctx context.Context) {
 	go s.renewalLoop(ctx)
 }
 
+// renewalLoop periodically reconciles every stored certificate until shutdown.
 func (s *Service) renewalLoop(ctx context.Context) {
 	slog.Info("certservice: ARI renewal worker started")
 	defer slog.Info("certservice: ARI renewal worker stopped")
@@ -44,6 +48,7 @@ func (s *Service) renewalLoop(ctx context.Context) {
 	}
 }
 
+// reconcileRenewals processes ready certificates sequentially.
 func (s *Service) reconcileRenewals(ctx context.Context) {
 	entries, err := s.store.Inventory()
 	if err != nil {
@@ -63,6 +68,7 @@ func (s *Service) reconcileRenewals(ctx context.Context) {
 	}
 }
 
+// reconcileCertificate refreshes ARI state and renews addr when scheduled.
 func (s *Service) reconcileCertificate(ctx context.Context, addr netip.Addr) error {
 	bundle, err := s.store.Load(addr)
 	if err != nil || bundle == nil {
@@ -106,10 +112,13 @@ func (s *Service) reconcileCertificate(ctx context.Context, addr netip.Addr) err
 	if now.Before(bundle.Renewal.RenewAt) {
 		return nil
 	}
-	return s.renewCertificate(ctx, addr, bundle, leaf)
+	ariDriven := validWindow(bundle.Renewal.WindowStart, bundle.Renewal.WindowEnd)
+	return s.renewCertificate(ctx, addr, bundle, leaf, ariDriven)
 }
 
-func (s *Service) renewCertificate(ctx context.Context, addr netip.Addr, current *certstore.CertBundle, leaf *x509.Certificate) error {
+// renewCertificate replaces the current certificate and persists retry state on
+// failure without making the still-valid predecessor unavailable.
+func (s *Service) renewCertificate(ctx context.Context, addr netip.Addr, current *certstore.CertBundle, leaf *x509.Certificate, ariDriven bool) error {
 	key := addr.String()
 	slog.Info("certservice: renewal started", "addr", addr, "certificate_id", current.Renewal.CertificateID)
 	_, err, _ := s.sfGroup.Do(key, func() (any, error) {
@@ -118,9 +127,12 @@ func (s *Service) renewCertificate(ctx context.Context, addr netip.Addr, current
 		domains := privateip.Domains(addr, s.config.Zone)
 		result, err := acmeissue.Issue(ctx, acmeissue.Request{Domains: domains[:], Email: s.config.Email, AccountKey: s.config.AccountKey, Environment: s.config.Environment, CACertPath: s.config.CACertPath, Resolver: s.config.Resolver, TXTStore: s.txtStore, Replaces: leaf})
 		if err != nil {
-			current.Renewal.NextAttempt = time.Now().UTC().Add(retryAfter(err))
-			_ = s.store.SaveBundle(addr, current)
+			current.Renewal.NextAttempt = retryAt(err, time.Now().UTC())
+			saveErr := s.store.SaveBundle(addr, current)
 			slog.Warn("certservice: renewal failed", "addr", addr, "next_attempt", current.Renewal.NextAttempt, "error", err)
+			if saveErr != nil {
+				return nil, errors.Join(err, fmt.Errorf("persist renewal retry: %w", saveErr))
+			}
 			return nil, err
 		}
 		if err := s.store.Save(addr, result.PrivKeyPEM, result.CertChainDER); err != nil {
@@ -135,12 +147,16 @@ func (s *Service) renewCertificate(ctx context.Context, addr netip.Addr, current
 		if err := s.store.SaveBundle(addr, fresh); err != nil {
 			return nil, err
 		}
+		if recordErr := s.metrics.RecordRenewal(ctx, ariDriven); recordErr != nil {
+			slog.Warn("certservice: lifecycle metric unavailable", "addr", addr, "error", recordErr)
+		}
 		slog.Info("certservice: renewal succeeded", "addr", addr)
 		return fresh, nil
 	})
 	return err
 }
 
+// retryAfter returns the remaining CA delay or the local fallback delay.
 func retryAfter(err error) time.Duration {
 	var problem interface{ RetryAfterDuration() time.Duration }
 	if errors.As(err, &problem) {
@@ -151,6 +167,19 @@ func retryAfter(err error) time.Duration {
 	return renewalFailureRetry
 }
 
+// retryAt returns an absolute retry instant so elapsed request time is not
+// added to an upstream Retry-After value a second time.
+func retryAt(err error, now time.Time) time.Time {
+	var problem interface{ RetryAfterTime() time.Time }
+	if errors.As(err, &problem) {
+		if at := problem.RetryAfterTime(); at.After(now) {
+			return at.UTC()
+		}
+	}
+	return now.Add(renewalFailureRetry)
+}
+
+// leafFromBundle parses the leaf certificate from a persisted bundle.
 func leafFromBundle(bundle *certstore.CertBundle) (*x509.Certificate, error) {
 	block, _ := pem.Decode(bundle.FullChainPEM)
 	if block == nil {
@@ -159,10 +188,12 @@ func leafFromBundle(bundle *certstore.CertBundle) (*x509.Certificate, error) {
 	return x509.ParseCertificate(block.Bytes)
 }
 
+// validWindow reports whether start and end form a usable ARI window.
 func validWindow(start, end time.Time) bool {
 	return !start.IsZero() && !end.IsZero() && start.Before(end)
 }
 
+// chooseRenewAt deterministically spreads a certificate within its ARI window.
 func chooseRenewAt(id string, start, end time.Time) time.Time {
 	if !start.Before(end) {
 		return end

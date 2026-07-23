@@ -46,6 +46,11 @@ run = "go fmt ./..."
 description = "Run all tests"
 run = "go test ./..."
 
+[tasks.e2e]
+description = "Run local ACME and HTTP API lifecycle tests against Pebble"
+depends = ["setup"]
+run = "go test -tags=e2e -p 1 ./internal/acme -run TestPebble -count=1"
+
 [tasks.race]
 description = "Run all tests with the race detector"
 run = "go test -race ./..."

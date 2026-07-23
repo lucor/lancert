@@ -1,4 +1,5 @@
-// Package metrics records and persists privacy-preserving DNS KPI aggregates.
+// Package metrics records and persists privacy-preserving DNS and certificate
+// lifecycle KPI aggregates.
 package metrics
 
 import (
@@ -33,13 +34,17 @@ const histogramLen = len(LatencyBounds) + 1
 type Recorder interface {
 	RecordTarget(target netip.Addr)
 	RecordResponse(writeSucceeded bool, latency time.Duration)
+	RecordInitialIssuance(context.Context) error
+	RecordRenewal(context.Context, bool) error
 }
 
 // Disabled is a fail-open recorder. It intentionally discards every event.
 type Disabled struct{}
 
-func (Disabled) RecordTarget(netip.Addr)            {}
-func (Disabled) RecordResponse(bool, time.Duration) {}
+func (Disabled) RecordTarget(netip.Addr)                     {}
+func (Disabled) RecordResponse(bool, time.Duration)          {}
+func (Disabled) RecordInitialIssuance(context.Context) error { return nil }
+func (Disabled) RecordRenewal(context.Context, bool) error   { return nil }
 
 // Breakdown is a query-volume-ranked KPI item.
 type Breakdown struct {
@@ -64,33 +69,47 @@ type Readiness struct {
 	Error     string
 }
 
+// CertificateLifecycle is a best-effort, persistent aggregate of successful
+// certificate operations. Counters start at RecordedSince; they are not
+// reconstructed from the certificate store.
+type CertificateLifecycle struct {
+	RecordedSince    time.Time
+	InitialIssuances uint64
+	Renewals         uint64
+	ARIRenewals      uint64
+	TotalIssued      uint64
+	ARIAdoption      float64
+	HasARIAdoption   bool
+}
+
 // Snapshot is a point-in-time copy. Snapshot() deep-copies its slices, so a
 // caller cannot mutate the copy retained by the metrics service.
 type Snapshot struct {
-	Queries24H          uint64
-	WriteAttempts24H    uint64
-	WriteSuccesses24H   uint64
-	RecentQueries       uint64
-	RecentWindow        time.Duration
-	ResponseP95         time.Duration
-	ResponseP95Overflow bool
-	DailyLookups        []DailyLookup
-	ActiveTargets30D    uint64
-	ActivePrefixes30D   uint64
-	TopBlocks           []Breakdown
-	TopPrefixes         []Breakdown
-	TopTargets          []Breakdown
-	OtherBlockQueries   uint64
-	OtherPrefixQueries  uint64
-	OtherTargetQueries  uint64
-	TrackingComplete    bool
-	FreshAt             time.Time
-	Degraded            bool
-	Unavailable         bool
-	Error               string
-	LastFlushAt         time.Time
-	LastFlushError      string
-	Readiness           Readiness
+	Queries24H           uint64
+	WriteAttempts24H     uint64
+	WriteSuccesses24H    uint64
+	RecentQueries        uint64
+	RecentWindow         time.Duration
+	ResponseP95          time.Duration
+	ResponseP95Overflow  bool
+	DailyLookups         []DailyLookup
+	ActiveTargets30D     uint64
+	ActivePrefixes30D    uint64
+	TopBlocks            []Breakdown
+	TopPrefixes          []Breakdown
+	TopTargets           []Breakdown
+	OtherBlockQueries    uint64
+	OtherPrefixQueries   uint64
+	OtherTargetQueries   uint64
+	TrackingComplete     bool
+	FreshAt              time.Time
+	Degraded             bool
+	Unavailable          bool
+	Error                string
+	LastFlushAt          time.Time
+	LastFlushError       string
+	Readiness            Readiness
+	CertificateLifecycle CertificateLifecycle
 }
 
 // Option configures a Store.
@@ -219,11 +238,16 @@ func (s *Store) migrate(ctx context.Context) error {
 CREATE TABLE IF NOT EXISTS dns_hourly (hour TEXT PRIMARY KEY, queries INTEGER NOT NULL, write_attempts INTEGER NOT NULL, write_successes INTEGER NOT NULL, latency_count INTEGER NOT NULL, latency_sum_us INTEGER NOT NULL, latency_max_us INTEGER NOT NULL, h0 INTEGER NOT NULL, h1 INTEGER NOT NULL, h2 INTEGER NOT NULL, h3 INTEGER NOT NULL, h4 INTEGER NOT NULL, h5 INTEGER NOT NULL, h6 INTEGER NOT NULL, h7 INTEGER NOT NULL, h8 INTEGER NOT NULL, h9 INTEGER NOT NULL, h10 INTEGER NOT NULL, h11 INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS target_activity_daily (date TEXT NOT NULL, target INTEGER NOT NULL CHECK(target BETWEEN 0 AND 4294967295), queries INTEGER NOT NULL, PRIMARY KEY(date,target));
 CREATE TABLE IF NOT EXISTS kpi_daily (date TEXT PRIMARY KEY, active_targets INTEGER NOT NULL, active_prefixes INTEGER NOT NULL, tracking_complete INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS certificate_lifecycle (id INTEGER PRIMARY KEY CHECK(id=1), recorded_since INTEGER NOT NULL, baseline_initialized INTEGER NOT NULL DEFAULT 0, initial_issuances INTEGER NOT NULL DEFAULT 0, renewals INTEGER NOT NULL DEFAULT 0, ari_renewals INTEGER NOT NULL DEFAULT 0);
 `
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("metrics: migrate: %w", err)
 	}
+	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO certificate_lifecycle(id, recorded_since) VALUES(1, ?)`, s.cfg.now().UTC().Unix()); err != nil {
+		return fmt.Errorf("metrics: migrate lifecycle: %w", err)
+	}
 	for _, statement := range []string{
+		`ALTER TABLE certificate_lifecycle ADD COLUMN baseline_initialized INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE dns_hourly ADD COLUMN latency_count INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE dns_hourly ADD COLUMN latency_sum_us INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE dns_hourly ADD COLUMN latency_max_us INTEGER NOT NULL DEFAULT 0`,
@@ -231,6 +255,61 @@ CREATE TABLE IF NOT EXISTS kpi_daily (date TEXT PRIMARY KEY, active_targets INTE
 		if _, err := s.db.ExecContext(ctx, statement); err != nil && !isDuplicateColumn(err) {
 			return fmt.Errorf("metrics: migrate: %w", err)
 		}
+	}
+	return nil
+}
+
+// InitializeCertificateLifecycle seeds the counters once from certificates
+// already present when lifecycle metrics are introduced. Those certificates
+// are intentionally treated as initial issuances; earlier renewal history is
+// not reconstructed. RecordedSince uses since when available, or the current
+// time when the existing bundles have no issuance metadata.
+func (s *Store) InitializeCertificateLifecycle(ctx context.Context, issued uint64, since time.Time) error {
+	if since.IsZero() {
+		since = s.cfg.now()
+	}
+	unix := since.UTC().Unix()
+	result, err := s.db.ExecContext(ctx, `UPDATE certificate_lifecycle SET recorded_since=?, baseline_initialized=1, initial_issuances=initial_issuances+? WHERE id=1 AND baseline_initialized=0`, unix, int64(issued))
+	if err != nil {
+		return fmt.Errorf("metrics: initialize certificate lifecycle: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("metrics: initialize certificate lifecycle: %w", err)
+	}
+	if changed == 0 {
+		return nil
+	}
+	return s.RebuildSnapshot(ctx)
+}
+
+// RecordInitialIssuance records a successfully persisted first issuance.
+func (s *Store) RecordInitialIssuance(ctx context.Context) error {
+	return s.recordLifecycle(ctx, "initial_issuances")
+}
+
+// RecordRenewal records a successfully persisted replacement. ARI-driven
+// identifies the scheduling decision, including retries after the ARI window.
+func (s *Store) RecordRenewal(ctx context.Context, ariDriven bool) error {
+	query := `UPDATE certificate_lifecycle SET renewals=renewals+1`
+	if ariDriven {
+		query += `, ari_renewals=ari_renewals+1`
+	}
+	query += ` WHERE id=1`
+	if _, err := s.db.ExecContext(ctx, query); err != nil {
+		return fmt.Errorf("metrics: record lifecycle: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) recordLifecycle(ctx context.Context, column string) error {
+	switch column {
+	case "initial_issuances", "renewals", "ari_renewals":
+	default:
+		return errors.New("metrics: invalid lifecycle counter")
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE certificate_lifecycle SET `+column+`=`+column+`+1 WHERE id=1`); err != nil {
+		return fmt.Errorf("metrics: record lifecycle: %w", err)
 	}
 	return nil
 }
@@ -501,6 +580,16 @@ func (s *Store) RebuildSnapshot(ctx context.Context) error {
 	var out Snapshot
 	out.FreshAt = now
 	out.TrackingComplete = true
+	var recordedUnix int64
+	if err := s.db.QueryRowContext(ctx, `SELECT recorded_since,initial_issuances,renewals,ari_renewals FROM certificate_lifecycle WHERE id=1`).Scan(&recordedUnix, &out.CertificateLifecycle.InitialIssuances, &out.CertificateLifecycle.Renewals, &out.CertificateLifecycle.ARIRenewals); err != nil {
+		return s.snapshotError(err)
+	}
+	out.CertificateLifecycle.RecordedSince = time.Unix(recordedUnix, 0).UTC()
+	out.CertificateLifecycle.TotalIssued = out.CertificateLifecycle.InitialIssuances + out.CertificateLifecycle.Renewals
+	if out.CertificateLifecycle.Renewals > 0 {
+		out.CertificateLifecycle.ARIAdoption = float64(out.CertificateLifecycle.ARIRenewals) * 100 / float64(out.CertificateLifecycle.Renewals)
+		out.CertificateLifecycle.HasARIAdoption = true
+	}
 	var responseHist [histogramLen]uint64
 	row := s.db.QueryRowContext(ctx, `SELECT COALESCE(sum(queries),0),COALESCE(sum(write_attempts),0),COALESCE(sum(write_successes),0),COALESCE(sum(h0),0),COALESCE(sum(h1),0),COALESCE(sum(h2),0),COALESCE(sum(h3),0),COALESCE(sum(h4),0),COALESCE(sum(h5),0),COALESCE(sum(h6),0),COALESCE(sum(h7),0),COALESCE(sum(h8),0),COALESCE(sum(h9),0),COALESCE(sum(h10),0),COALESCE(sum(h11),0) FROM dns_hourly WHERE hour>=?`, cutoff)
 	if err := row.Scan(&out.Queries24H, &out.WriteAttempts24H, &out.WriteSuccesses24H, &responseHist[0], &responseHist[1], &responseHist[2], &responseHist[3], &responseHist[4], &responseHist[5], &responseHist[6], &responseHist[7], &responseHist[8], &responseHist[9], &responseHist[10], &responseHist[11]); err != nil {

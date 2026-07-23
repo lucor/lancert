@@ -38,6 +38,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"time"
 
@@ -94,27 +95,9 @@ func (s *Store) SaveBundle(addr netip.Addr, bundle *CertBundle) error {
 	if bundle == nil {
 		return fmt.Errorf("bundle is nil")
 	}
-	chain, err := parseChainPEM(bundle.FullChainPEM)
+	leaf, err := validateBundleMaterial(bundle)
 	if err != nil {
 		return err
-	}
-	for i := 1; i < len(chain); i++ {
-		if err := chain[i-1].CheckSignatureFrom(chain[i]); err != nil {
-			return fmt.Errorf("verify certificate chain: %w", err)
-		}
-	}
-	leaf := chain[0]
-	keyBlock, _ := pem.Decode(bundle.PrivKeyPEM)
-	if keyBlock == nil {
-		return fmt.Errorf("private key PEM is invalid")
-	}
-	key, err := x509.ParseECPrivateKey(keyBlock.Bytes)
-	if err != nil {
-		return fmt.Errorf("parse private key: %w", err)
-	}
-	leafKey, ok := leaf.PublicKey.(*ecdsa.PublicKey)
-	if !ok || leafKey.X.Cmp(key.PublicKey.X) != 0 || leafKey.Y.Cmp(key.PublicKey.Y) != 0 {
-		return fmt.Errorf("private key does not match leaf certificate")
 	}
 	bundle.Meta.Domains = append([]string(nil), leaf.DNSNames...)
 	bundle.Meta.NotAfter = leaf.NotAfter.UTC()
@@ -122,6 +105,33 @@ func (s *Store) SaveBundle(addr netip.Addr, bundle *CertBundle) error {
 		bundle.Renewal.CertificateID = certificateID(leaf)
 	}
 	return s.writeBundle(addr, bundle.PrivKeyPEM, bundle.FullChainPEM, bundle.Meta, bundle.Renewal)
+}
+
+// validateBundleMaterial verifies the certificate chain and matching private key.
+func validateBundleMaterial(bundle *CertBundle) (*x509.Certificate, error) {
+	chain, err := parseChainPEM(bundle.FullChainPEM)
+	if err != nil {
+		return nil, err
+	}
+	for i := 1; i < len(chain); i++ {
+		if err := chain[i-1].CheckSignatureFrom(chain[i]); err != nil {
+			return nil, fmt.Errorf("verify certificate chain: %w", err)
+		}
+	}
+	leaf := chain[0]
+	keyBlock, _ := pem.Decode(bundle.PrivKeyPEM)
+	if keyBlock == nil {
+		return nil, fmt.Errorf("private key PEM is invalid")
+	}
+	key, err := x509.ParseECPrivateKey(keyBlock.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse private key: %w", err)
+	}
+	leafKey, ok := leaf.PublicKey.(*ecdsa.PublicKey)
+	if !ok || leafKey.X.Cmp(key.PublicKey.X) != 0 || leafKey.Y.Cmp(key.PublicKey.Y) != 0 {
+		return nil, fmt.Errorf("private key does not match leaf certificate")
+	}
+	return leaf, nil
 }
 
 // InventoryEntry describes whether a certificate bundle can be loaded now.
@@ -214,6 +224,7 @@ func (s *Store) SaveWithRenewal(addr netip.Addr, privKeyPEM []byte, certChainDER
 	return s.writeBundle(addr, privKeyPEM, fullchain, meta, renewal)
 }
 
+// writeBundle atomically writes the validated representation for addr.
 func (s *Store) writeBundle(addr netip.Addr, privKeyPEM, fullchain []byte, meta Meta, renewal RenewalState) error {
 	dir := s.ipDir(addr)
 	if err := os.MkdirAll(dir, dirPerm); err != nil {
@@ -233,6 +244,7 @@ func (s *Store) writeBundle(addr netip.Addr, privKeyPEM, fullchain []byte, meta 
 	return atomicWrite(filepath.Join(dir, bundleFile), bundleJSON)
 }
 
+// parseChainPEM parses every certificate block in a PEM chain.
 func parseChainPEM(data []byte) ([]*x509.Certificate, error) {
 	var chain []*x509.Certificate
 	for rest := data; len(rest) > 0; {
@@ -256,6 +268,7 @@ func parseChainPEM(data []byte) ([]*x509.Certificate, error) {
 	return chain, nil
 }
 
+// certificateID derives the RFC 9773 ARI certificate identifier.
 func certificateID(leaf *x509.Certificate) string {
 	serialDER, err := asn1.Marshal(leaf.SerialNumber)
 	if err != nil || len(serialDER) < 3 {
@@ -264,6 +277,7 @@ func certificateID(leaf *x509.Certificate) string {
 	return base64.RawURLEncoding.EncodeToString(leaf.AuthorityKeyId) + "." + base64.RawURLEncoding.EncodeToString(serialDER[2:])
 }
 
+// atomicWrite durably replaces path with private file permissions.
 func atomicWrite(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".bundle-*")
@@ -305,7 +319,15 @@ func atomicWrite(path string, data []byte) error {
 // Returns nil, nil if no certificate exists.
 func (s *Store) Load(addr netip.Addr) (*CertBundle, error) {
 	dir := s.ipDir(addr)
-	if data, err := os.ReadFile(filepath.Join(dir, bundleFile)); err == nil {
+	bundlePath := filepath.Join(dir, bundleFile)
+	if info, err := os.Lstat(bundlePath); err == nil {
+		if !info.Mode().IsRegular() || info.Mode().Perm() != filePerm {
+			return nil, fmt.Errorf("bundle must be a regular file with permissions %04o, got %s", filePerm, info.Mode())
+		}
+		data, err := os.ReadFile(bundlePath)
+		if err != nil {
+			return nil, fmt.Errorf("read bundle: %w", err)
+		}
 		var stored persistedBundle
 		if err := json.Unmarshal(data, &stored); err != nil {
 			return nil, fmt.Errorf("parse bundle: %w", err)
@@ -313,13 +335,24 @@ func (s *Store) Load(addr netip.Addr) (*CertBundle, error) {
 		if stored.Version != bundleVersion {
 			return nil, fmt.Errorf("unsupported bundle version %d", stored.Version)
 		}
-		return &CertBundle{PrivKeyPEM: stored.PrivKeyPEM, FullChainPEM: stored.FullChainPEM, Meta: stored.Meta, Renewal: stored.Renewal}, nil
+		bundle := &CertBundle{PrivKeyPEM: stored.PrivKeyPEM, FullChainPEM: stored.FullChainPEM, Meta: stored.Meta, Renewal: stored.Renewal}
+		leaf, err := validateBundleMaterial(bundle)
+		if err != nil {
+			return nil, fmt.Errorf("validate bundle: %w", err)
+		}
+		if !slices.Equal(bundle.Meta.Domains, leaf.DNSNames) || !bundle.Meta.NotAfter.Equal(leaf.NotAfter) {
+			return nil, fmt.Errorf("bundle metadata does not match leaf certificate")
+		}
+		if want := certificateID(leaf); bundle.Renewal.CertificateID != want {
+			return nil, fmt.Errorf("bundle certificate ID does not match leaf certificate")
+		}
+		return bundle, nil
 	} else if !os.IsNotExist(err) {
-		return nil, fmt.Errorf("read bundle: %w", err)
+		return nil, fmt.Errorf("stat bundle: %w", err)
 	}
 
-	metaData, err := os.ReadFile(filepath.Join(dir, metaFile))
-	if os.IsNotExist(err) {
+	metaData, err := readPrivateFile(filepath.Join(dir, metaFile), metaFile)
+	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
@@ -331,12 +364,12 @@ func (s *Store) Load(addr netip.Addr) (*CertBundle, error) {
 		return nil, fmt.Errorf("parse meta: %w", err)
 	}
 
-	privKey, err := os.ReadFile(filepath.Join(dir, privkeyFile))
+	privKey, err := readPrivateFile(filepath.Join(dir, privkeyFile), privkeyFile)
 	if err != nil {
 		return nil, fmt.Errorf("read privkey: %w", err)
 	}
 
-	fullchain, err := os.ReadFile(filepath.Join(dir, fullchainFile))
+	fullchain, err := readPrivateFile(filepath.Join(dir, fullchainFile), fullchainFile)
 	if err != nil {
 		return nil, fmt.Errorf("read fullchain: %w", err)
 	}
@@ -448,16 +481,11 @@ func (s *Store) Inventory() ([]InventoryEntry, error) {
 	return entries, nil
 }
 
+// inspectPEM verifies that a legacy PEM file exists with safe permissions.
 func inspectPEM(path, name string) error {
-	f, err := os.Open(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		return fmt.Errorf("open %s: %w", name, err)
-	}
-	defer f.Close()
-
-	info, err := f.Stat()
-	if err != nil {
-		return fmt.Errorf("stat %s: %w", name, err)
 	}
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("stat %s: not a regular file", name)
@@ -470,6 +498,26 @@ func inspectPEM(path, name string) error {
 	}
 
 	return nil
+}
+
+// readPrivateFile validates a legacy store file before reading its contents.
+// Lstat is intentional: legacy paths must not follow symlinks or open FIFOs.
+func readPrivateFile(path, name string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("stat %s: %w", name, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("stat %s: not a regular file", name)
+	}
+	if info.Mode().Perm() != filePerm {
+		return nil, fmt.Errorf("stat %s: permissions are %04o, want %04o", name, info.Mode().Perm(), filePerm)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", name, err)
+	}
+	return data, nil
 }
 
 // ipDir returns the directory path for the given IP.
