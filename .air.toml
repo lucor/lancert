@@ -2,7 +2,7 @@ root = "."
 tmp_dir = "./bin/.air"
 
 [build]
-cmd = "go build -o ./bin/lancert ./cmd/lancert"
+cmd = "commit_sha=$(git rev-parse HEAD 2>/dev/null || printf 'dev'); go build -trimpath -ldflags=\"-X main.commitHash=${commit_sha}\" -o ./bin/lancert ./cmd/lancert"
 bin = "./bin/lancert"
 full_bin = "./bin/lancert"
 include_ext = ["go", "tpl", "tmpl", "html"]

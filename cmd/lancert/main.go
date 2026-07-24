@@ -28,6 +28,9 @@ import (
 // commitHash is set at build time via -ldflags "-X main.commitHash=<commit-sha>".
 var commitHash = "dev"
 
+// buildVersion is set at build time via -ldflags "-X main.buildVersion=<version>".
+var buildVersion = "dev"
+
 const (
 	defaultZone     = "lancert.dev."
 	defaultDataDir  = "data"
@@ -219,7 +222,10 @@ func run() error {
 		}
 		return metricStore.Snapshot()
 	}
-	apiHandler := api.New(certSvc, statusSnapshot)
+	apiHandler := api.NewWithBuildInfo(certSvc, statusSnapshot, api.BuildInfo{
+		Version:    buildVersion,
+		CommitHash: shortCommitHash(commitHash),
+	})
 	handler := api.Chain(apiHandler,
 		api.Recover,
 		api.SecurityHeaders,
@@ -265,7 +271,7 @@ func run() error {
 	}
 
 	// Wait for ready
-	version := "lancert@" + commitHash[:min(7, len(commitHash))]
+	version := buildVersion + " (" + shortCommitHash(commitHash) + ")"
 	slog.Info("service started", "version", version, "acme_env", environment, "certs", store.Count())
 	slog.Warn("HTTP API serves private keys over plaintext — use a TLS-terminating reverse proxy in production")
 
@@ -312,6 +318,10 @@ func run() error {
 
 	slog.Info("shutdown complete")
 	return nil
+}
+
+func shortCommitHash(hash string) string {
+	return hash[:min(6, len(hash))]
 }
 
 // readinessFromInventory derives service readiness from stored certificates.

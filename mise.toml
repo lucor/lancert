@@ -70,5 +70,5 @@ run = [
 description = "Build a static lancert binary"
 run = [
   "mkdir -p ./bin",
-  "CGO_ENABLED=0 go build -o ./bin/lancert ./cmd/lancert",
+  "commit_sha=$(git rev-parse HEAD 2>/dev/null || printf 'dev'); CGO_ENABLED=0 go build -trimpath -ldflags=\"-X main.commitHash=${commit_sha}\" -o ./bin/lancert ./cmd/lancert",
 ]

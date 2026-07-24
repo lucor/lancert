@@ -3,13 +3,14 @@ FROM golang:1.26-alpine AS builder
 WORKDIR /build
 
 ARG COMMIT_SHA=dev
+ARG VERSION=dev
 
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 
 RUN CGO_ENABLED=0 go build -trimpath \
-    -ldflags="-w -s -X main.commitHash=$(echo ${COMMIT_SHA} | cut -c1-7)" \
+    -ldflags="-w -s -X main.buildVersion=${VERSION} -X main.commitHash=$(echo ${COMMIT_SHA} | cut -c1-6)" \
     -o lancert ./cmd/lancert/
 
 RUN CGO_ENABLED=0 go build -trimpath \
