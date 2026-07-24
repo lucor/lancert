@@ -1,0 +1,1300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>lancert — Web Server Integration Guide</title>
+  <meta name="description" content="Configure Caddy, Nginx, or Traefik to serve local HTTPS certificates on private IP addresses using lancert.">
+  <meta property="og:title" content="lancert — Web Server Integration Guide">
+  <meta property="og:description" content="Configure Caddy, Nginx, or Traefik to serve lancert TLS certificates on your LAN.">
+  <meta property="og:image" content="/assets/og-image-1200x630.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="lancert — Web Server Integration Guide">
+  <meta name="twitter:description" content="Configure Caddy, Nginx, or Traefik to serve lancert TLS certificates on your LAN.">
+  <meta name="twitter:image" content="/assets/og-image-1200x630.png">
+  <meta name="theme-color" content="#FFFFFF">
+  <link rel="icon" href="/assets/favicon.ico" sizes="48x48">
+  <link rel="icon" href="/assets/favicon.svg" sizes="any" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+  {{if .Analytics}}<script defer src="https://analytics.lucor.dev/script.js" data-website-id="1c9b0509-2f00-493b-bb0a-da02ffb6ff1d"></script>{{end}}
+<style>
+  :root {
+    --lan: #078DE5;
+    --lan-soft: #E5F4FE;
+    --cert: #6B9E8A;
+    --cert-soft: #E5F0EA;
+    --ink: #111827;
+    --text: #374151;
+    --muted: #6b7280;
+    --subtle: #9ca3af;
+    --line: #e5e7eb;
+    --line-subtle: #f3f4f6;
+    --bg: #ffffff;
+    --surface: #f9fafb;
+    --surface-hover: #f3f4f6;
+    --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  }
+
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: var(--font-sans);
+    color: var(--text);
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.6;
+    font-size: 16px;
+  }
+
+  a { color: var(--lan); text-decoration: none; transition: color 0.15s; }
+  a:hover { text-decoration: underline; }
+
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.875em;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    padding: 2px 6px;
+    border-radius: 5px;
+    color: #1e293b;
+    font-weight: 500;
+  }
+
+  /* ── NAV ── */
+  .nav {
+    max-width: 1040px;
+    margin: 0 auto;
+    padding: 24px 16px 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    text-decoration: none;
+    font-weight: 750;
+    font-size: 20px;
+    letter-spacing: -.03em;
+  }
+
+  .logo:hover { text-decoration: none; }
+  .logo img { display: block; width: 128px; height: auto; }
+
+  .nav-links {
+    display: flex;
+    gap: 4px 16px;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .nav-links a {
+    font-size: 14px;
+    color: var(--muted);
+    font-weight: 500;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .nav-links a.active { color: var(--ink); font-weight: 600; }
+  .nav-links a:hover { color: var(--ink); text-decoration: none; }
+
+  .gh-star {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 8px 12px;
+    transition: border-color 0.15s, background-color 0.15s;
+  }
+
+  .gh-star:hover { border-color: var(--muted); background: var(--surface); text-decoration: none; color: var(--ink); }
+  .gh-star svg { width: 15px; height: 15px; fill: currentColor; }
+
+  /* ── CONTAINER ── */
+  .container {
+    max-width: 1040px;
+    margin: 0 auto;
+    padding: 32px 16px 60px;
+  }
+
+  /* ── BREADCRUMB ── */
+  .breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 16px;
+    font-weight: 500;
+  }
+
+  .breadcrumb a { color: var(--muted); }
+  .breadcrumb a:hover { color: var(--ink); text-decoration: none; }
+  .breadcrumb span { color: var(--subtle); }
+
+  /* ── PAGE HEADER ── */
+  .page-header {
+    margin-bottom: 32px;
+    border-bottom: 1px solid var(--line-subtle);
+    padding-bottom: 32px;
+  }
+
+  .header-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  .page-header h1 {
+    font-size: clamp(32px, 5vw, 44px);
+    font-weight: 800;
+    letter-spacing: -.035em;
+    line-height: 1.1;
+    color: var(--ink);
+    margin-bottom: 12px;
+  }
+
+  .page-header .subtitle {
+    font-size: 18px;
+    color: var(--muted);
+    line-height: 1.6;
+    max-width: none;
+  }
+
+  .header-badges {
+    display: flex;
+    gap: 8px;
+    margin-top: 16px;
+    flex-wrap: wrap;
+  }
+
+  .badge {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 99px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    color: var(--muted);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .badge.lan { background: var(--lan-soft); border-color: rgba(7, 141, 229, 0.2); color: #0369a1; }
+
+  /* ── TWO-COLUMN DOC LAYOUT ── */
+  .doc-layout {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 32px;
+    align-items: flex-start;
+  }
+
+  .doc-content {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* ── STICKY RIGHT SIDEBAR TOC ── */
+  .toc-sidebar {
+    width: 100%;
+    position: static;
+  }
+
+  .toc-sticky-box {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px;
+    background: var(--surface);
+  }
+
+  .toc-sidebar-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 750;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--ink);
+    margin-bottom: 14px;
+  }
+
+  .toc-sidebar-list {
+    list-style: none;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px 12px;
+  }
+
+  .toc-link {
+    font-size: 13.5px;
+    font-weight: 500;
+    color: var(--muted);
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.15s ease;
+    line-height: 1.4;
+    min-height: 36px;
+  }
+
+  .toc-link:hover {
+    color: var(--ink);
+    text-decoration: none;
+  }
+
+  .toc-link.active {
+    color: var(--lan);
+    font-weight: 700;
+    text-decoration: none;
+  }
+
+  .toc-num {
+    font-size: 11px;
+    font-weight: 750;
+    font-family: var(--font-mono);
+    color: var(--lan);
+    background: var(--lan-soft);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+
+  /* ── GUIDED STEPS CONTAINER ── */
+  .step-card {
+    position: relative;
+    padding: 20px 16px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: var(--bg);
+    margin-bottom: 32px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+    transition: border-color 0.2s;
+  }
+
+  .step-card:hover {
+    border-color: #cbd5e1;
+  }
+
+  .step-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 16px;
+  }
+
+  .step-badge {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: var(--lan-soft);
+    color: var(--lan);
+    font-weight: 750;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .step-title {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--ink);
+    letter-spacing: -0.3px;
+  }
+
+  .step-desc {
+    font-size: 15px;
+    color: var(--text);
+    line-height: 1.6;
+    margin-bottom: 20px;
+  }
+
+  .example-pill-list {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 12px 0 20px;
+  }
+
+  .example-pill {
+    font-size: 13px;
+    font-family: var(--font-mono);
+    padding: 4px 10px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--ink);
+  }
+
+  /* ── CALLOUT ── */
+  .callout-warning {
+    border: 1px solid #fcd34d;
+    border-radius: 10px;
+    padding: 16px;
+    background: #fffbeb;
+    margin-bottom: 32px;
+    display: flex;
+    gap: 14px;
+  }
+
+  .callout-icon {
+    font-size: 20px;
+    line-height: 1;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  .callout-content h4 {
+    font-size: 15px;
+    font-weight: 700;
+    color: #92400e;
+    margin-bottom: 4px;
+  }
+
+  .callout-content p {
+    font-size: 14px;
+    color: #78350f;
+    line-height: 1.6;
+    margin: 0;
+  }
+
+  /* ── SERVER SELECTOR TABS ── */
+  .server-tabs-header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    background: var(--surface);
+    padding: 6px;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    margin-bottom: 24px;
+  }
+
+  .server-tab-btn {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 44px;
+    padding: 10px 12px;
+    border-radius: 7px;
+    border: none;
+    background: transparent;
+    font-size: 14px;
+    font-weight: 650;
+    color: var(--muted);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    font-family: var(--font-sans);
+  }
+
+  .server-tab-btn:hover {
+    color: var(--ink);
+    background: rgba(255, 255, 255, 0.6);
+  }
+
+  .server-tab-btn.active {
+    background: var(--bg);
+    color: var(--ink);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    font-weight: 700;
+  }
+
+  .server-tab-btn svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .tab-content-panel {
+    display: none;
+    animation: fadeIn 0.2s ease-in-out;
+  }
+
+  .tab-content-panel.active {
+    display: block;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(2px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── TERMINAL UI ── */
+  .terminal {
+    background: #18181b;
+    border-radius: 10px;
+    overflow: hidden;
+    text-align: left;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+    margin: 16px 0 20px;
+    border: 1px solid #27272a;
+  }
+
+  .terminal-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    gap: 8px;
+    background: #27272a;
+  }
+
+  .terminal-title {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: #a1a1aa;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .terminal-title-dots {
+    display: flex;
+    gap: 6px;
+  }
+
+  .terminal-title-dots i {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    display: block;
+  }
+
+  .terminal-title-dots .r { background: #ff5f57; }
+  .terminal-title-dots .y { background: #febc2e; }
+  .terminal-title-dots .g { background: #28c840; }
+
+  .copy-btn {
+    background: #3f3f46;
+    border: 1px solid #52525b;
+    border-radius: 5px;
+    color: #e4e4e7;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: var(--font-sans);
+    padding: 4px 10px;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 36px;
+    flex-shrink: 0;
+  }
+
+  .copy-btn:hover { background: #52525b; color: #ffffff; border-color: #71717a; }
+  .copy-btn svg { width: 13px; height: 13px; fill: currentColor; }
+
+  .terminal-body {
+    padding: 16px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.85;
+    color: #f4f4f5;
+    overflow-x: auto;
+  }
+
+  .terminal-body .line { display: block; white-space: pre; }
+  .terminal-body .blank { height: 8px; }
+  .t-comment { color: #71717a; font-style: italic; }
+  .t-ps { color: var(--lan); font-weight: 600; }
+  .t-cmd { color: #f4f4f5; }
+  .t-url { color: #38bdf8; }
+  .t-flag { color: #fbbf24; }
+  .t-ok { color: #4ade80; }
+  .t-res { color: #a1a1aa; }
+  .t-dns { color: #c084fc; }
+  .t-key { color: #38bdf8; }
+
+  /* ── FAQ / TROUBLESHOOTING ── */
+  .faq-card {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--bg);
+    overflow: hidden;
+  }
+
+  .faq-card details {
+    border-bottom: 1px solid var(--line-subtle);
+  }
+
+  .faq-card details:last-child { border-bottom: none; }
+
+  .faq-card summary {
+    font-size: 15px;
+    font-weight: 650;
+    color: var(--ink);
+    cursor: pointer;
+    padding: 16px;
+    min-height: 52px;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    transition: background 0.15s;
+  }
+
+  .faq-card summary:hover {
+    background: var(--surface);
+  }
+
+  .faq-card summary::-webkit-details-marker { display: none; }
+
+  .faq-card summary::after {
+    content: '+';
+    font-size: 18px;
+    font-weight: 500;
+    color: var(--subtle);
+    flex-shrink: 0;
+    transition: transform 0.15s;
+  }
+
+  .faq-card details[open] summary::after {
+    content: '−';
+  }
+
+  .faq-card details p {
+    font-size: 14px;
+    color: var(--text);
+    line-height: 1.65;
+    padding: 0 16px 18px;
+    margin: 0;
+  }
+
+  /* ── FOOTER ── */
+  .site-footer {
+    max-width: 1040px;
+    margin: 0 auto;
+    padding: 32px 24px 48px;
+    color: var(--muted);
+    font-size: 13px;
+    text-align: center;
+    border-top: 1px solid var(--line-subtle);
+  }
+
+  .site-footer p { margin: 0; }
+
+  /* ── WIDER LAYOUTS ── */
+  @media (min-width: 641px) {
+    .nav {
+      padding: 32px 24px 0;
+      flex-direction: row;
+      justify-content: space-between;
+      align-items: center;
+      gap: 24px;
+    }
+
+    .nav-links {
+      width: auto;
+      gap: 24px;
+      justify-content: flex-end;
+    }
+
+    .nav-links a { min-height: 0; }
+    .container { padding: 48px 24px 80px; }
+    .step-card { padding: 32px; }
+    .server-tabs-header { flex-direction: row; gap: 8px; }
+    .server-tab-btn { width: auto; flex: 1; padding: 10px 16px; }
+    .terminal-body { padding: 18px 20px; font-size: 13px; }
+    .faq-card summary { padding: 18px 24px; }
+    .faq-card details p { padding: 0 24px 20px; }
+    .callout-warning { padding: 20px 24px; }
+  }
+
+  @media (min-width: 901px) {
+    .doc-layout {
+      flex-direction: row;
+      gap: 48px;
+    }
+
+    .toc-sidebar {
+      width: 230px;
+      flex-shrink: 0;
+      position: sticky;
+      top: 32px;
+    }
+
+    .toc-sticky-box {
+      border-left: 2px solid var(--line);
+      border-top: none;
+      border-right: none;
+      border-bottom: none;
+      border-radius: 0;
+      padding: 0 0 0 16px;
+      background: transparent;
+    }
+
+    .toc-sidebar-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+  }
+
+  @media (max-width: 360px) {
+    .toc-sidebar-list { grid-template-columns: 1fr; }
+    .terminal-title { font-size: 11px; }
+    .copy-btn { padding-inline: 8px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after { transition: none !important; }
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--lan);
+    outline-offset: 2px;
+  }
+
+  .copy-btn:focus-visible {
+    outline-color: #38bdf8;
+  }
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <a href="/" class="logo" aria-label="lancert home"><img src="/assets/lancert-logo.svg" alt="lancert"></a>
+  <div class="nav-links">
+    <a href="/docs">Docs</a>
+    <a href="/docs/web-servers" class="active" aria-current="page">Web Servers</a>
+    <a href="/docs/api">API Reference</a>
+    <a href="/status">Status</a>
+    <a class="gh-star" href="https://github.com/lucor/lancert">
+      <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25z"/></svg>
+      Star on GitHub
+    </a>
+  </div>
+</nav>
+
+<main class="container">
+  <!-- BREADCRUMB -->
+  <nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/docs">Docs</a>
+    <span>/</span>
+    <span style="color: var(--ink)">Web Server Integration</span>
+  </nav>
+
+  <!-- PAGE HEADER -->
+  <header class="page-header">
+    <div class="header-top">
+      <div>
+        <h1>Web Server Integration</h1>
+        <p class="subtitle">Serve local applications over browser-trusted HTTPS with Caddy, Nginx, or Traefik.</p>
+      </div>
+    </div>
+    <div class="header-badges">
+      <span class="badge lan">Wildcard HTTPS</span>
+      <span class="badge">Private LAN IPs</span>
+      <span class="badge">Renewal Helper</span>
+    </div>
+  </header>
+
+  <!-- TWO-COLUMN DOC LAYOUT -->
+  <div class="doc-layout">
+
+    <!-- MAIN CONTENT COLUMN -->
+    <div class="doc-content">
+      <!-- OVERVIEW & CALLOUT -->
+      <div id="overview" style="scroll-margin-top: 32px;">
+        <div class="doc-section" style="margin-bottom: 24px;">
+          <p>This guide uses <code>192.168.1.50</code> as a working example. Its certificate covers:</p>
+          <div class="example-pill-list">
+            <span class="example-pill">192-168-1-50.lancert.dev</span>
+            <span class="example-pill">*.192-168-1-50.lancert.dev</span>
+          </div>
+          <p style="color: var(--muted); font-size: 14px;">Replace the IP address, domain names, and file paths in the examples below with your own environment values.</p>
+        </div>
+
+        <div class="callout-warning">
+          <div class="callout-icon">⚠️</div>
+          <div class="callout-content">
+            <h4>For local development &amp; LAN testing only</h4>
+            <p>lancert private keys are publicly accessible by design: anyone can download the certificate and key for any supported private IP. While valid certificates eliminate browser warnings, they do not prove device identity. Do not use these certificates in production or on untrusted networks.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- STEP 1: DOWNLOAD -->
+      <div class="step-card" id="step-1" style="scroll-margin-top: 32px;">
+        <div class="step-header">
+          <div class="step-badge">01</div>
+          <h2 class="step-title">Download Certificate &amp; Key</h2>
+        </div>
+        <p class="step-desc">Trigger certificate issuance for your LAN IP via HTTP API, then download the PEM files:</p>
+
+        <div class="terminal">
+          <div class="terminal-bar">
+            <div class="terminal-title">
+              <div class="terminal-title-dots"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+              <span>bash — trigger issuance</span>
+            </div>
+            <button type="button" class="copy-btn" data-copy="curl --fail -X POST https://lancert.dev/certs/192.168.1.50"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25ZM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>Copy</button>
+          </div>
+          <div class="terminal-body">
+            <span class="line"><span class="t-comment"># Issuance via Let's Encrypt DNS-01 challenge takes ~5-10s</span></span>
+            <span class="line"><span class="t-ps">$ </span><span class="t-cmd">curl </span><span class="t-flag">--fail -X POST </span><span class="t-url">https://lancert.dev/certs/192.168.1.50</span></span>
+          </div>
+        </div>
+
+        <p style="font-size: 14px; color: var(--muted); margin-top: 16px;">Once ready, save the fullchain certificate and private key to your local config folder:</p>
+
+        <div class="terminal">
+          <div class="terminal-bar">
+            <div class="terminal-title">
+              <div class="terminal-title-dots"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+              <span>bash — save certificate files</span>
+            </div>
+            <button type="button" class="copy-btn" data-copy="IP=192.168.1.50
+CERT_DIR=&quot;$HOME/.config/lancert/$IP&quot;
+
+mkdir -p &quot;$CERT_DIR&quot;
+curl --fail -o &quot;$CERT_DIR/fullchain.pem&quot; &quot;https://lancert.dev/certs/$IP/fullchain.pem&quot;
+curl --fail -o &quot;$CERT_DIR/privkey.pem&quot; &quot;https://lancert.dev/certs/$IP/privkey.pem&quot;
+chmod 600 &quot;$CERT_DIR/privkey.pem&quot;"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25ZM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>Copy</button>
+          </div>
+          <div class="terminal-body">
+            <span class="line"><span class="t-cmd">IP=192.168.1.50</span></span>
+            <span class="line"><span class="t-cmd">CERT_DIR="$HOME/.config/lancert/$IP"</span></span>
+            <div class="blank"></div>
+            <span class="line"><span class="t-cmd">mkdir -p "$CERT_DIR"</span></span>
+            <span class="line"><span class="t-cmd">curl </span><span class="t-flag">--fail -o </span><span class="t-cmd">"$CERT_DIR/fullchain.pem" </span><span class="t-url">"https://lancert.dev/certs/$IP/fullchain.pem"</span></span>
+            <span class="line"><span class="t-cmd">curl </span><span class="t-flag">--fail -o </span><span class="t-cmd">"$CERT_DIR/privkey.pem" </span><span class="t-url">"https://lancert.dev/certs/$IP/privkey.pem"</span></span>
+            <span class="line"><span class="t-cmd">chmod 600 "$CERT_DIR/privkey.pem"</span></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- STEP 2: SERVER CONFIGURATION (TABS) -->
+      <div class="step-card" id="step-2" style="scroll-margin-top: 32px;">
+        <div class="step-header">
+          <div class="step-badge">02</div>
+          <h2 class="step-title">Configure Your Web Server</h2>
+        </div>
+        <p class="step-desc">Select your reverse proxy or web server below to view the configuration snippet and reload command:</p>
+
+        <!-- SERVER SELECTOR TABS -->
+        <div class="server-tabs-header" role="tablist" aria-label="Web Server Configurations">
+          <button type="button" class="server-tab-btn active" role="tab" aria-selected="true" aria-controls="panel-caddy" id="tab-btn-caddy" data-server="caddy">
+            Caddy
+          </button>
+          <button type="button" class="server-tab-btn" role="tab" aria-selected="false" aria-controls="panel-nginx" id="tab-btn-nginx" data-server="nginx">
+            Nginx
+          </button>
+          <button type="button" class="server-tab-btn" role="tab" aria-selected="false" aria-controls="panel-traefik" id="tab-btn-traefik" data-server="traefik">
+            Traefik
+          </button>
+        </div>
+
+        <!-- CADDY PANEL -->
+        <div class="tab-content-panel active" id="panel-caddy" role="tabpanel" aria-labelledby="tab-btn-caddy" aria-hidden="false">
+          <p>Point the <a href="https://caddyserver.com/docs/caddyfile/directives/tls" target="_blank" rel="noopener">tls directive</a> in your <code>Caddyfile</code> at the downloaded certificate files:</p>
+
+          <div class="terminal">
+            <div class="terminal-bar">
+              <div class="terminal-title">
+                <div class="terminal-title-dots"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+                <span>Caddyfile</span>
+              </div>
+              <button type="button" class="copy-btn" data-copy="192-168-1-50.lancert.dev, *.192-168-1-50.lancert.dev {
+    tls /home/alice/.config/lancert/192.168.1.50/fullchain.pem /home/alice/.config/lancert/192.168.1.50/privkey.pem
+    reverse_proxy 127.0.0.1:3000
+}"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25ZM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>Copy</button>
+            </div>
+            <div class="terminal-body">
+              <span class="line"><span class="t-dns">192-168-1-50.lancert.dev</span><span class="t-res">, </span><span class="t-dns">*.192-168-1-50.lancert.dev</span> <span class="t-res">{</span></span>
+              <span class="line">    <span class="t-key">tls</span> <span class="t-url">/home/alice/.config/lancert/192.168.1.50/fullchain.pem</span> <span class="t-url">/home/alice/.config/lancert/192.168.1.50/privkey.pem</span></span>
+              <span class="line">    <span class="t-cmd">reverse_proxy 127.0.0.1:3000</span></span>
+              <span class="line"><span class="t-res">}</span></span>
+            </div>
+          </div>
+
+          <p style="font-size: 14px; color: var(--muted); margin-top: 16px;">Reload Caddy to apply the new certificates:</p>
+
+          <div class="terminal">
+            <div class="terminal-bar">
+              <div class="terminal-title">
+                <div class="terminal-title-dots"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+                <span>bash — reload Caddy</span>
+              </div>
+              <button type="button" class="copy-btn" data-copy="caddy reload --force --config /path/to/Caddyfile"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25ZM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>Copy</button>
+            </div>
+            <div class="terminal-body">
+              <span class="line"><span class="t-ps">$ </span><span class="t-cmd">caddy reload </span><span class="t-flag">--force --config </span><span class="t-url">/path/to/Caddyfile</span></span>
+            </div>
+          </div>
+          <p class="note-text">💡 <code>--force</code> tells Caddy to reload manually provided certificates even if the Caddyfile text hasn't changed.</p>
+        </div>
+
+        <!-- NGINX PANEL -->
+        <div class="tab-content-panel" id="panel-nginx" role="tabpanel" aria-labelledby="tab-btn-nginx" aria-hidden="true">
+          <p>Configure SSL directives inside your Nginx server block:</p>
+
+          <div class="terminal">
+            <div class="terminal-bar">
+              <div class="terminal-title">
+                <div class="terminal-title-dots"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+                <span>nginx.conf</span>
+              </div>
+              <button type="button" class="copy-btn" data-copy="server {
+    listen 443 ssl;
+    server_name 192-168-1-50.lancert.dev
+                *.192-168-1-50.lancert.dev;
+
+    ssl_certificate     /home/alice/.config/lancert/192.168.1.50/fullchain.pem;
+    ssl_certificate_key /home/alice/.config/lancert/192.168.1.50/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25ZM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>Copy</button>
+            </div>
+            <div class="terminal-body">
+              <span class="line"><span class="t-cmd">server {</span></span>
+              <span class="line"><span class="t-cmd">    listen 443 ssl;</span></span>
+              <span class="line"><span class="t-cmd">    server_name </span><span class="t-dns">192-168-1-50.lancert.dev</span></span>
+              <span class="line"><span class="t-cmd">                </span><span class="t-dns">*.192-168-1-50.lancert.dev</span><span class="t-cmd">;</span></span>
+              <div class="blank"></div>
+              <span class="line"><span class="t-key">    ssl_certificate     </span><span class="t-url">/home/alice/.config/lancert/192.168.1.50/fullchain.pem</span><span class="t-cmd">;</span></span>
+              <span class="line"><span class="t-key">    ssl_certificate_key </span><span class="t-url">/home/alice/.config/lancert/192.168.1.50/privkey.pem</span><span class="t-cmd">;</span></span>
+              <div class="blank"></div>
+              <span class="line"><span class="t-cmd">    location / {</span></span>
+              <span class="line"><span class="t-cmd">        proxy_pass http://127.0.0.1:3000;</span></span>
+              <span class="line"><span class="t-cmd">        proxy_set_header Host $host;</span></span>
+              <span class="line"><span class="t-cmd">        proxy_set_header X-Forwarded-Proto $scheme;</span></span>
+              <span class="line"><span class="t-cmd">    }</span></span>
+              <span class="line"><span class="t-cmd">}</span></span>
+            </div>
+          </div>
+
+          <p style="font-size: 14px; color: var(--muted); margin-top: 16px;">Test configuration and reload Nginx:</p>
+
+          <div class="terminal">
+            <div class="terminal-bar">
+              <div class="terminal-title">
+                <div class="terminal-title-dots"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+                <span>bash — reload Nginx</span>
+              </div>
+              <button type="button" class="copy-btn" data-copy="nginx -t &amp;&amp; nginx -s reload"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25ZM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>Copy</button>
+            </div>
+            <div class="terminal-body">
+              <span class="line"><span class="t-ps">$ </span><span class="t-cmd">nginx -t &amp;&amp; nginx -s reload</span></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- TRAEFIK PANEL -->
+        <div class="tab-content-panel" id="panel-traefik" role="tabpanel" aria-labelledby="tab-btn-traefik" aria-hidden="true">
+          <p>1. Enable file watching in static configuration (<code>traefik.yml</code>):</p>
+
+          <div class="terminal">
+            <div class="terminal-bar">
+              <div class="terminal-title">
+                <div class="terminal-title-dots"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+                <span>traefik.yml</span>
+              </div>
+              <button type="button" class="copy-btn" data-copy="providers:
+  file:
+    directory: /home/alice/.config/traefik/dynamic
+    watch: true"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25ZM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>Copy</button>
+            </div>
+            <div class="terminal-body">
+              <span class="line"><span class="t-cmd">providers:</span></span>
+              <span class="line"><span class="t-cmd">  file:</span></span>
+              <span class="line"><span class="t-cmd">    directory: /home/alice/.config/traefik/dynamic</span></span>
+              <span class="line"><span class="t-cmd">    watch: true</span></span>
+            </div>
+          </div>
+
+          <p style="margin-top: 16px;">2. Reference the certificates in dynamic configuration (<code>lancert.yml</code>):</p>
+
+          <div class="terminal">
+            <div class="terminal-bar">
+              <div class="terminal-title">
+                <div class="terminal-title-dots"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+                <span>dynamic/lancert.yml</span>
+              </div>
+              <button type="button" class="copy-btn" data-copy="tls:
+  certificates:
+    - certFile: /home/alice/.config/lancert/192.168.1.50/fullchain.pem
+      keyFile: /home/alice/.config/lancert/192.168.1.50/privkey.pem"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25ZM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>Copy</button>
+            </div>
+            <div class="terminal-body">
+              <span class="line"><span class="t-cmd">tls:</span></span>
+              <span class="line"><span class="t-cmd">  certificates:</span></span>
+              <span class="line"><span class="t-key">    - certFile: </span><span class="t-url">/home/alice/.config/lancert/192.168.1.50/fullchain.pem</span></span>
+              <span class="line"><span class="t-key">      keyFile:  </span><span class="t-url">/home/alice/.config/lancert/192.168.1.50/privkey.pem</span></span>
+            </div>
+          </div>
+
+          <p style="font-size: 14px; color: var(--muted); margin-top: 16px;">Trigger dynamic reload by touching the config file:</p>
+
+          <div class="terminal">
+            <div class="terminal-bar">
+              <div class="terminal-title">
+                <div class="terminal-title-dots"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+                <span>bash — reload Traefik</span>
+              </div>
+              <button type="button" class="copy-btn" data-copy="touch &quot;$HOME/.config/traefik/dynamic/lancert.yml&quot;"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25ZM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>Copy</button>
+            </div>
+            <div class="terminal-body">
+              <span class="line"><span class="t-ps">$ </span><span class="t-cmd">touch </span><span class="t-url">"$HOME/.config/traefik/dynamic/lancert.yml"</span></span>
+            </div>
+          </div>
+          <p class="note-text">🐳 Docker tip: Mount the entire certificate directory into the container instead of individual files.</p>
+        </div>
+      </div>
+
+      <!-- STEP 3: AUTOMATED RENEWAL -->
+      <div class="step-card" id="step-3" style="scroll-margin-top: 32px;">
+        <div class="step-header">
+          <div class="step-badge">03</div>
+          <h2 class="step-title">Automated Renewal Script</h2>
+        </div>
+        <p class="step-desc">lancert certificates renew automatically on our servers. To fetch updated certificates and reload your web server without unnecessary restarts, use this POSIX shell helper script:</p>
+
+        <p style="font-size: 14px; font-weight: 600; color: var(--ink); margin-bottom: 8px;">Save script as <code>~/.local/bin/lancert-update</code>:</p>
+
+        <div class="terminal">
+          <div class="terminal-bar">
+            <div class="terminal-title">
+              <div class="terminal-title-dots"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+              <span>lancert-update</span>
+            </div>
+            <button type="button" class="copy-btn" data-copy="#!/bin/sh
+set -eu
+
+if [ &quot;$#&quot; -lt 3 ] || [ &quot;$2&quot; != &quot;--&quot; ]; then
+    echo &quot;usage: lancert-update IP -- RELOAD [ARG ...]&quot; >&amp;2
+    exit 2
+fi
+
+ip=$1
+shift 2
+
+dest=&quot;${XDG_CONFIG_HOME:-&quot;$HOME/.config&quot;}/lancert/$ip&quot;
+url=&quot;https://lancert.dev/certs/$ip&quot;
+
+mkdir -p &quot;$dest&quot;
+tmp=$(mktemp -d &quot;$dest/.update.XXXXXX&quot;)
+trap 'rm -rf &quot;$tmp&quot;' EXIT HUP INT TERM
+
+curl --fail -o &quot;$tmp/fullchain.pem&quot; &quot;$url/fullchain.pem&quot;
+curl --fail -o &quot;$tmp/privkey.pem&quot; &quot;$url/privkey.pem&quot;
+
+cert_key=$(
+    openssl x509 -in &quot;$tmp/fullchain.pem&quot; -pubkey -noout |
+        openssl pkey -pubin -outform DER 2>/dev/null |
+        openssl dgst -sha256
+)
+private_key=$(
+    openssl pkey -in &quot;$tmp/privkey.pem&quot; -pubout -outform DER 2>/dev/null |
+        openssl dgst -sha256
+)
+
+if [ &quot;$cert_key&quot; != &quot;$private_key&quot; ]; then
+    echo &quot;certificate and private key do not match&quot; >&amp;2
+    exit 1
+fi
+
+if [ -f &quot;$dest/fullchain.pem&quot; ] &amp;&amp;
+   cmp -s &quot;$tmp/fullchain.pem&quot; &quot;$dest/fullchain.pem&quot;; then
+    exit 0
+fi
+
+chmod 644 &quot;$tmp/fullchain.pem&quot;
+chmod 600 &quot;$tmp/privkey.pem&quot;
+mv &quot;$tmp/fullchain.pem&quot; &quot;$dest/fullchain.pem&quot;
+mv &quot;$tmp/privkey.pem&quot; &quot;$dest/privkey.pem&quot;
+
+&quot;$@&quot;"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25ZM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>Copy</button>
+          </div>
+          <div class="terminal-body">
+            <span class="line"><span class="t-comment">#!/bin/sh</span></span>
+            <span class="line"><span class="t-cmd">set -eu</span></span>
+            <div class="blank"></div>
+            <span class="line"><span class="t-cmd">if [ "$#" -lt 3 ] || [ "$2" != "--" ]; then</span></span>
+            <span class="line"><span class="t-cmd">    echo "usage: lancert-update IP -- RELOAD [ARG ...]" >&amp;2</span></span>
+            <span class="line"><span class="t-cmd">    exit 2</span></span>
+            <span class="line"><span class="t-cmd">fi</span></span>
+            <div class="blank"></div>
+            <span class="line"><span class="t-cmd">ip=$1</span></span>
+            <span class="line"><span class="t-cmd">shift 2</span></span>
+            <div class="blank"></div>
+            <span class="line"><span class="t-cmd">dest="${XDG_CONFIG_HOME:-"$HOME/.config"}/lancert/$ip"</span></span>
+            <span class="line"><span class="t-cmd">url="https://lancert.dev/certs/$ip"</span></span>
+            <div class="blank"></div>
+            <span class="line"><span class="t-cmd">mkdir -p "$dest"</span></span>
+            <span class="line"><span class="t-cmd">tmp=$(mktemp -d "$dest/.update.XXXXXX")</span></span>
+            <span class="line"><span class="t-cmd">trap 'rm -rf "$tmp"' EXIT HUP INT TERM</span></span>
+            <div class="blank"></div>
+            <span class="line"><span class="t-cmd">curl --fail -o "$tmp/fullchain.pem" "$url/fullchain.pem"</span></span>
+            <span class="line"><span class="t-cmd">curl --fail -o "$tmp/privkey.pem" "$url/privkey.pem"</span></span>
+            <div class="blank"></div>
+            <span class="line"><span class="t-comment"># Verify public/private key cryptographic match</span></span>
+            <span class="line"><span class="t-cmd">cert_key=$(openssl x509 -in "$tmp/fullchain.pem" -pubkey -noout | openssl pkey -pubin -outform DER 2>/dev/null | openssl dgst -sha256)</span></span>
+            <span class="line"><span class="t-cmd">private_key=$(openssl pkey -in "$tmp/privkey.pem" -pubout -outform DER 2>/dev/null | openssl dgst -sha256)</span></span>
+            <div class="blank"></div>
+            <span class="line"><span class="t-cmd">if [ "$cert_key" != "$private_key" ]; then</span></span>
+            <span class="line"><span class="t-cmd">    echo "certificate and private key do not match" >&amp;2</span></span>
+            <span class="line"><span class="t-cmd">    exit 1</span></span>
+            <span class="line"><span class="t-cmd">fi</span></span>
+            <div class="blank"></div>
+            <span class="line"><span class="t-comment"># Skip reload if certificate hasn't changed</span></span>
+            <span class="line"><span class="t-cmd">if [ -f "$dest/fullchain.pem" ] &amp;&amp; cmp -s "$tmp/fullchain.pem" "$dest/fullchain.pem"; then</span></span>
+            <span class="line"><span class="t-cmd">    exit 0</span></span>
+            <span class="line"><span class="t-cmd">fi</span></span>
+            <div class="blank"></div>
+            <span class="line"><span class="t-cmd">chmod 644 "$tmp/fullchain.pem"</span></span>
+            <span class="line"><span class="t-cmd">chmod 600 "$tmp/privkey.pem"</span></span>
+            <span class="line"><span class="t-cmd">mv "$tmp/fullchain.pem" "$dest/fullchain.pem"</span></span>
+            <span class="line"><span class="t-cmd">mv "$tmp/privkey.pem" "$dest/privkey.pem"</span></span>
+            <div class="blank"></div>
+            <span class="line"><span class="t-cmd">"$@"</span></span>
+          </div>
+        </div>
+
+        <p style="font-size: 14px; color: var(--muted); margin: 16px 0 8px;">Make it executable:</p>
+
+        <div class="terminal">
+          <div class="terminal-bar">
+            <div class="terminal-title">
+              <div class="terminal-title-dots"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+              <span>bash — chmod</span>
+            </div>
+            <button type="button" class="copy-btn" data-copy="mkdir -p &quot;$HOME/.local/bin&quot; &amp;&amp; chmod 755 &quot;$HOME/.local/bin/lancert-update&quot;"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25ZM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>Copy</button>
+          </div>
+          <div class="terminal-body">
+            <span class="line"><span class="t-ps">$ </span><span class="t-cmd">mkdir -p </span><span class="t-url">"$HOME/.local/bin"</span><span class="t-cmd"> &amp;&amp; chmod 755 </span><span class="t-url">"$HOME/.local/bin/lancert-update"</span></span>
+          </div>
+        </div>
+
+        <p style="font-size: 14px; font-weight: 600; color: var(--ink); margin: 20px 0 8px;">Run daily with cron or your preferred scheduler:</p>
+
+        <!-- RENEWAL SYNCED TABS -->
+        <div class="server-tabs-header" role="tablist" aria-label="Server Renewal Commands">
+          <button type="button" class="server-tab-btn active" role="tab" aria-selected="true" aria-controls="renewal-caddy" id="renewal-tab-btn-caddy" data-server="caddy">Caddy</button>
+          <button type="button" class="server-tab-btn" role="tab" aria-selected="false" aria-controls="renewal-nginx" id="renewal-tab-btn-nginx" data-server="nginx">Nginx</button>
+          <button type="button" class="server-tab-btn" role="tab" aria-selected="false" aria-controls="renewal-traefik" id="renewal-tab-btn-traefik" data-server="traefik">Traefik</button>
+        </div>
+
+        <div class="tab-content-panel active" id="renewal-caddy" role="tabpanel" aria-labelledby="renewal-tab-btn-caddy" aria-hidden="false">
+          <div class="terminal">
+            <div class="terminal-bar">
+              <div class="terminal-title">
+                <div class="terminal-title-dots"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+                <span>cron — Caddy renewal invocation</span>
+              </div>
+              <button type="button" class="copy-btn" data-copy="&quot;$HOME/.local/bin/lancert-update&quot; 192.168.1.50 -- caddy reload --force --config /path/to/Caddyfile"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25ZM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>Copy</button>
+            </div>
+            <div class="terminal-body">
+              <span class="line"><span class="t-ps">$ </span><span class="t-cmd">"$HOME/.local/bin/lancert-update" 192.168.1.50 -- \</span></span>
+              <span class="line"><span class="t-cmd">  caddy reload </span><span class="t-flag">--force --config </span><span class="t-url">/path/to/Caddyfile</span></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="tab-content-panel" id="renewal-nginx" role="tabpanel" aria-labelledby="renewal-tab-btn-nginx" aria-hidden="true">
+          <div class="terminal">
+            <div class="terminal-bar">
+              <div class="terminal-title">
+                <div class="terminal-title-dots"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+                <span>cron — Nginx renewal invocation</span>
+              </div>
+              <button type="button" class="copy-btn" data-copy="&quot;$HOME/.local/bin/lancert-update&quot; 192.168.1.50 -- nginx -s reload"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25ZM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>Copy</button>
+            </div>
+            <div class="terminal-body">
+              <span class="line"><span class="t-ps">$ </span><span class="t-cmd">"$HOME/.local/bin/lancert-update" 192.168.1.50 -- nginx -s reload</span></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="tab-content-panel" id="renewal-traefik" role="tabpanel" aria-labelledby="renewal-tab-btn-traefik" aria-hidden="true">
+          <div class="terminal">
+            <div class="terminal-bar">
+              <div class="terminal-title">
+                <div class="terminal-title-dots"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+                <span>cron — Traefik renewal invocation</span>
+              </div>
+              <button type="button" class="copy-btn" data-copy="&quot;$HOME/.local/bin/lancert-update&quot; 192.168.1.50 -- touch &quot;$HOME/.config/traefik/dynamic/lancert.yml&quot;"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25ZM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>Copy</button>
+            </div>
+            <div class="terminal-body">
+              <span class="line"><span class="t-ps">$ </span><span class="t-cmd">"$HOME/.local/bin/lancert-update" 192.168.1.50 -- \</span></span>
+              <span class="line"><span class="t-cmd">  touch </span><span class="t-url">"$HOME/.config/traefik/dynamic/lancert.yml"</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- STEP 4: VERIFY -->
+      <div class="step-card" id="step-4" style="scroll-margin-top: 32px;">
+        <div class="step-header">
+          <div class="step-badge">04</div>
+          <h2 class="step-title">Verify the Served TLS Certificate</h2>
+        </div>
+        <p class="step-desc">Check that your web server serves the certificate for your LAN hostname. You can open the hostname in a browser or test it with <code>curl</code>; use OpenSSL when you need to inspect certificate details or verify the SNI response:</p>
+
+        <div class="terminal">
+          <div class="terminal-bar">
+            <div class="terminal-title">
+              <div class="terminal-title-dots"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+              <span>bash — optional OpenSSL handshake check</span>
+            </div>
+            <button type="button" class="copy-btn" data-copy="echo | openssl s_client -connect 192.168.1.50:443 -servername 192-168-1-50.lancert.dev 2>/dev/null | openssl x509 -noout -subject -issuer -dates"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25ZM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>Copy</button>
+          </div>
+          <div class="terminal-body">
+            <span class="line"><span class="t-cmd">echo | openssl s_client \</span></span>
+            <span class="line"><span class="t-cmd">  -connect </span><span class="t-url">192.168.1.50:443</span><span class="t-cmd"> \</span></span>
+            <span class="line"><span class="t-cmd">  -servername </span><span class="t-dns">192-168-1-50.lancert.dev</span><span class="t-cmd"> 2>/dev/null | \</span></span>
+            <span class="line"><span class="t-cmd">  openssl x509 -noout -subject -issuer -dates</span></span>
+          </div>
+        </div>
+        <p class="note-text">💡 Any covered subdomain works as SNI servername (e.g. <code>app.192-168-1-50.lancert.dev</code>).</p>
+      </div>
+
+      <!-- TROUBLESHOOTING -->
+      <div id="troubleshooting" style="scroll-margin-top: 32px; margin-top: 48px;">
+        <h2 style="font-size: 24px; font-weight: 700; color: var(--ink); margin-bottom: 20px; letter-spacing: -0.5px;">Troubleshooting &amp; FAQ</h2>
+        <div class="faq-card">
+          <details>
+            <summary>The download returns HTTP 404</summary>
+            <p>The certificate may not exist yet on the server. Send a <code>POST https://lancert.dev/certs/{ip}</code> request first, wait 5–10 seconds for Let's Encrypt issuance, and retry downloading.</p>
+          </details>
+          <details>
+            <summary>The browser shows a certificate warning or mismatch</summary>
+            <p>Ensure you are connecting using a <code>*.lancert.dev</code> hostname (e.g. <code>https://192-168-1-50.lancert.dev</code>) rather than accessing the raw IP address directly in the browser location bar.</p>
+          </details>
+          <details>
+            <summary>The certificate was renewed on disk but the server still serves the old one</summary>
+            <p>Your web server has not reloaded the new certificate files from disk. Execute a reload command (e.g. <code>caddy reload --force</code> or <code>nginx -s reload</code>) or ensure your Traefik file provider is set to <code>watch: true</code>.</p>
+          </details>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT STICKY SIDEBAR TOC -->
+    <aside class="toc-sidebar" aria-label="Table of contents">
+      <div class="toc-sticky-box">
+        <div class="toc-sidebar-title">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M2 3.75C2 3.336 2.336 3 2.75 3h10.5a.75.75 0 0 1 0 1.5H2.75A.75.75 0 0 1 2 3.75Zm0 4C2 7.336 2.336 7 2.75 7h10.5a.75.75 0 0 1 0 1.5H2.75A.75.75 0 0 1 2 7.75Zm0 4c0-.414.336-.75.75-.75h10.5a.75.75 0 0 1 0 1.5H2.75a.75.75 0 0 1-.75-.75Z"/></svg>
+          <span>On this page</span>
+        </div>
+        <ul class="toc-sidebar-list">
+          <li><a href="#overview" class="toc-link">Overview &amp; Security</a></li>
+          <li><a href="#step-1" class="toc-link"><span class="toc-num">01</span> Download Certs</a></li>
+          <li><a href="#step-2" class="toc-link"><span class="toc-num">02</span> Server Config</a></li>
+          <li><a href="#step-3" class="toc-link"><span class="toc-num">03</span> Auto Renewal</a></li>
+          <li><a href="#step-4" class="toc-link"><span class="toc-num">04</span> Verification</a></li>
+          <li><a href="#troubleshooting" class="toc-link">Troubleshooting</a></li>
+        </ul>
+      </div>
+    </aside>
+
+  </div>
+</main>
+
+<footer class="site-footer">
+  <p>The <a href="https://github.com/lucor/lancert/blob/main/LICENSE">lancert software is MIT-licensed</a>. The software and DNS service are provided “as is”, without warranty.</p>
+</footer>
+
+<script>
+// Copy button feedback
+document.querySelectorAll('.copy-btn').forEach(function(btn) {
+  var origHTML = btn.innerHTML;
+  var busy = false;
+  btn.addEventListener('click', function() {
+    if (busy) return;
+    var text = btn.getAttribute('data-copy');
+    busy = true;
+    navigator.clipboard.writeText(text).then(function() {
+      btn.innerHTML = '<svg aria-hidden="true" viewBox="0 0 16 16"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/></svg>Copied!';
+    }).catch(function() {
+      btn.textContent = 'Error';
+    }).finally(function() {
+      setTimeout(function() { btn.innerHTML = origHTML; busy = false; }, 1600);
+    });
+  });
+});
+
+// Unified Web Server Tab Switcher
+function selectServer(serverName) {
+  document.querySelectorAll('[data-server]').forEach(function(b) {
+    var isCurrent = b.getAttribute('data-server') === serverName;
+    b.classList.toggle('active', isCurrent);
+    b.setAttribute('aria-selected', isCurrent ? 'true' : 'false');
+  });
+
+  document.querySelectorAll('.tab-content-panel').forEach(function(panel) {
+    var isCurrent = panel.id === 'panel-' + serverName || panel.id === 'renewal-' + serverName;
+    if (isCurrent) {
+      panel.classList.add('active');
+    } else {
+      panel.classList.remove('active');
+    }
+    panel.setAttribute('aria-hidden', isCurrent ? 'false' : 'true');
+  });
+}
+
+document.querySelectorAll('[data-server]').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    selectServer(btn.getAttribute('data-server'));
+  });
+});
+
+// IntersectionObserver for Sticky TOC active highlighting
+var observerOptions = {
+  root: null,
+  rootMargin: '0px 0px -60% 0px',
+  threshold: 0
+};
+
+var tocObserver = new IntersectionObserver(function(entries) {
+  entries.forEach(function(entry) {
+    if (entry.isIntersecting) {
+      var id = entry.target.getAttribute('id');
+      document.querySelectorAll('.toc-link').forEach(function(link) {
+        if (link.getAttribute('href') === '#' + id) {
+          link.classList.add('active');
+        } else {
+          link.classList.remove('active');
+        }
+      });
+    }
+  });
+}, observerOptions);
+
+['overview', 'step-1', 'step-2', 'step-3', 'step-4', 'troubleshooting'].forEach(function(id) {
+  var el = document.getElementById(id);
+  if (el) tocObserver.observe(el);
+});
+</script>
+
+</body>
+</html>

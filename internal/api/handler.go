@@ -33,6 +33,12 @@ var notFoundHTML []byte
 //go:embed static/docs.html
 var docsHTML []byte
 
+//go:embed static/docs-api.html
+var docsAPIHTML []byte
+
+//go:embed static/docs-web-servers.html
+var docsWebServersHTML []byte
+
 //go:embed static/status.html
 var statusHTML string
 
@@ -64,8 +70,22 @@ func serveAssets(w http.ResponseWriter, r *http.Request) {
 
 var statusTemplate = template.Must(template.New("status").Parse(statusHTML))
 var indexTemplate = template.Must(template.New("index").Parse(string(indexHTML)))
+var notFoundTemplate = template.Must(template.New("not-found").Parse(string(notFoundHTML)))
+var docsTemplate = template.Must(template.New("docs").Parse(string(docsHTML)))
+var docsAPITemplate = template.Must(template.New("docs-api").Parse(string(docsAPIHTML)))
+var docsWebServersTemplate = template.Must(template.New("docs-web-servers").Parse(string(docsWebServersHTML)))
 
 type indexData struct {
+	Analytics bool
+}
+
+// BuildInfo identifies the binary serving the status page.
+type BuildInfo struct {
+	Version    string
+	CommitHash string
+}
+
+type pageData struct {
 	Analytics bool
 }
 
@@ -74,11 +94,17 @@ type Handler struct {
 	service  *certservice.Service
 	mux      *http.ServeMux
 	snapshot func() metrics.Snapshot
+	build    BuildInfo
 }
 
 // New creates an API handler wired to the certificate service and status
 // snapshot provider.
 func New(svc *certservice.Service, snapshot func() metrics.Snapshot) *Handler {
+	return NewWithBuildInfo(svc, snapshot, BuildInfo{Version: "dev", CommitHash: "dev"})
+}
+
+// NewWithBuildInfo creates an API handler with build metadata for the status page.
+func NewWithBuildInfo(svc *certservice.Service, snapshot func() metrics.Snapshot, build BuildInfo) *Handler {
 	provider := func() metrics.Snapshot { return metrics.UnavailableSnapshot(nil) }
 	if snapshot != nil {
 		provider = snapshot
@@ -86,6 +112,7 @@ func New(svc *certservice.Service, snapshot func() metrics.Snapshot) *Handler {
 	h := &Handler{
 		service:  svc,
 		snapshot: provider,
+		build:    build,
 	}
 	h.mux = http.NewServeMux()
 	h.registerRoutes()
@@ -111,6 +138,8 @@ func (h *Handler) registerRoutes() {
 	h.mux.HandleFunc("GET /status", h.handleStatus)
 	h.mux.HandleFunc("GET /health", h.handleHealth)
 	h.mux.HandleFunc("GET /docs", handleDocs)
+	h.mux.HandleFunc("GET /docs/api", handleDocsAPI)
+	h.mux.HandleFunc("GET /docs/web-servers", handleDocsWebServers)
 	h.mux.HandleFunc("GET /openapi.yaml", handleOpenAPI)
 	h.mux.HandleFunc("GET /{$}", handleIndex)
 	h.mux.HandleFunc("GET /assets/", serveAssets)
@@ -325,6 +354,9 @@ func writeCertificateJSON(w http.ResponseWriter, r *http.Request, addr netip.Add
 
 type statusPageData struct {
 	metrics.Snapshot
+	Analytics                bool
+	Version                  string
+	CommitHash               string
 	SuccessPercent           string
 	RecentLookups            string
 	RecentPeriod             string
@@ -360,6 +392,9 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s := h.snapshot()
 	data := statusPageData{
 		Snapshot:                s,
+		Analytics:               analyticsHost(r.Host),
+		Version:                 h.build.Version,
+		CommitHash:              h.build.CommitHash,
 		SuccessPercent:          "Not available",
 		RecentLookups:           strconv.FormatUint(s.RecentQueries, 10),
 		RecentPeriod:            "Last 5 minutes",
@@ -477,10 +512,28 @@ func analyticsHost(hostport string) bool {
 	return host == "lancert.dev"
 }
 
-// handleDocs serves the Scalar API reference page.
+// handleDocs serves the documentation landing page.
 func handleDocs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(docsHTML)
+	if err := docsTemplate.Execute(w, pageData{Analytics: analyticsHost(r.Host)}); err != nil {
+		slog.Error("docs page: render failed", "error", err)
+	}
+}
+
+// handleDocsAPI serves the Scalar API reference page.
+func handleDocsAPI(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := docsAPITemplate.Execute(w, pageData{Analytics: analyticsHost(r.Host)}); err != nil {
+		slog.Error("api docs page: render failed", "error", err)
+	}
+}
+
+// handleDocsWebServers serves the web server integration guide page.
+func handleDocsWebServers(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := docsWebServersTemplate.Execute(w, pageData{Analytics: analyticsHost(r.Host)}); err != nil {
+		slog.Error("web server docs page: render failed", "error", err)
+	}
 }
 
 // handleOpenAPI serves the OpenAPI specification.
@@ -493,7 +546,9 @@ func handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 func handleNotFound(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusNotFound)
-	w.Write(notFoundHTML)
+	if err := notFoundTemplate.Execute(w, pageData{Analytics: analyticsHost(r.Host)}); err != nil {
+		slog.Error("not-found page: render failed", "error", err)
+	}
 }
 
 // CertJSON is the JSON response for a certificate.

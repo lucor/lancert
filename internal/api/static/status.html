@@ -18,6 +18,7 @@
   <link rel="icon" href="/assets/favicon.ico" sizes="48x48">
   <link rel="icon" href="/assets/favicon.svg" sizes="any" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+  {{if .Analytics}}<script defer src="https://analytics.lucor.dev/script.js" data-website-id="1c9b0509-2f00-493b-bb0a-da02ffb6ff1d"></script>{{end}}
   <title>lancert status — DNS and certificate readiness</title>
   <style>
     :root {
@@ -52,14 +53,22 @@
     .brand { font-size: 20px; font-weight: 750; letter-spacing: -.03em; text-decoration: none; }
     .brand:hover { text-decoration: none; }
     .brand img { display: block; width: 128px; height: auto; }
-    .nav-btn { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 5px 12px; text-decoration: none; transition: border-color 0.15s; }
-    .nav-btn:hover { border-color: var(--muted); text-decoration: none; color: var(--ink); }
-    .nav-btn svg { width: 15px; height: 15px; fill: currentColor; }
+    .nav-links { display: flex; align-items: center; gap: 20px; }
+    .nav-links a:not(.gh-star) { color: var(--muted); font-size: 14px; font-weight: 500; }
+    .nav-links a.active { color: var(--ink); font-weight: 650; }
+    .nav-links a:not(.gh-star):hover { color: var(--ink); text-decoration: none; }
+    .gh-star { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 5px 12px; text-decoration: none; transition: border-color 0.15s; }
+    .gh-star:hover { border-color: var(--muted); text-decoration: none; color: var(--ink); }
+    .gh-star svg { width: 15px; height: 15px; fill: currentColor; }
 
     header { padding: 72px 0 64px; }
     h1, h2, h3, p { margin-top: 0; }
     h1 { max-width: 680px; margin-bottom: 16px; color: var(--ink); font-size: clamp(40px, 7vw, 58px); font-weight: 750; line-height: 1.04; letter-spacing: -.045em; }
     .lede { max-width: 620px; margin-bottom: 24px; color: var(--muted); font-size: 18px; line-height: 1.65; }
+    .build-version { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 20px; padding: 7px 11px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); font-family: var(--font-mono); font-size: 13px; font-weight: 650; }
+    .build-version-label { color: var(--muted); font-family: var(--font-sans); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+    .build-version a { color: inherit; text-decoration: underline; text-decoration-color: var(--subtle); text-underline-offset: 3px; }
+    .build-version a:hover { color: var(--lan); text-decoration-color: currentColor; }
     .state { display: inline-flex; align-items: center; gap: 9px; padding: 8px 12px; border-radius: 999px; background: var(--cert-soft); color: #376a57; font-size: 14px; font-weight: 650; }
     .state::before { width: 8px; height: 8px; border-radius: 50%; background: currentColor; content: ""; }
     .state.limited { color: var(--warning); background: var(--warning-soft); }
@@ -123,6 +132,8 @@
 
     @media (max-width: 760px) {
       .shell { padding: 0 20px; }
+      nav { align-items: flex-start; gap: 16px; }
+      .nav-links { flex-wrap: wrap; gap: 12px 16px; }
       header { padding: 56px 0 48px; }
       h1 { font-size: 38px; }
       .section-heading { grid-template-columns: 1fr; gap: 8px; }
@@ -143,16 +154,24 @@
   <div class="shell">
     <nav aria-label="Main navigation">
       <a class="brand" href="/" aria-label="lancert home"><img src="/assets/lancert-logo.svg" alt="lancert"></a>
-      <a class="nav-btn" href="https://github.com/lucor/lancert">
-        <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25z"/></svg>
-        Star on GitHub
-      </a>
+      <div class="nav-links">
+        <a href="/docs">Docs</a>
+        <a href="/status" class="active" aria-current="page">Status</a>
+        <a class="gh-star" href="https://github.com/lucor/lancert">
+          <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25z"/></svg>
+          Star on GitHub
+        </a>
+      </div>
     </nav>
 
     <main>
       <header>
         <h1>lancert status</h1>
         <p class="lede">DNS performance and certificate readiness for private IP addresses.</p>
+        <div class="build-version" aria-label="Running version {{.Version}} with commit {{.CommitHash}}">
+          <span class="build-version-label">Version</span>
+          <span>{{if eq .Version "dev"}}{{.Version}}{{else}}<a href="https://github.com/lucor/lancert/releases/tag/{{.Version}}" target="_blank" rel="noopener">{{.Version}}</a>{{end}} ({{.CommitHash}})</span>
+        </div>
         {{if .Unavailable}}
           <div class="status-summary"><span class="state unavailable">Status data unavailable</span></div>
           <p class="notice">We cannot load status data right now. DNS and certificate delivery continue to run independently.</p>

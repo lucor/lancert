@@ -70,6 +70,19 @@ func TestStatus(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "Serving certificates since 23 Jul 2026.")
 	assert.Contains(t, rec.Body.String(), "Lookup trend")
 	assert.Contains(t, rec.Body.String(), "21 Jul: 12 lookups")
+	assert.Contains(t, rec.Body.String(), "dev (dev)")
+}
+
+func TestStatusBuildInfo(t *testing.T) {
+	store := certstore.New(t.TempDir())
+	svc := certservice.New(certservice.Config{Zone: "lancert.dev", Environment: acmeissue.EnvironmentStaging}, store, dnssrv.NewTXTStore(), metrics.Disabled{})
+	h := NewWithBuildInfo(svc, nil, BuildInfo{Version: "v2026.07.24", CommitHash: "abcdef"})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/status", nil))
+
+	assert.Contains(t, rec.Body.String(), ">v2026.07.24</a> (abcdef)")
+	assert.Contains(t, rec.Body.String(), "https://github.com/lucor/lancert/releases/tag/v2026.07.24")
 }
 
 func TestStatusWithoutRenewals(t *testing.T) {
@@ -103,6 +116,21 @@ func TestAssets(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
 
+func TestDocsPages(t *testing.T) {
+	h := newTestHandler(t)
+
+	for _, path := range []string{"/docs", "/docs/api", "/docs/web-servers"} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			assert.Equal(t, http.StatusOK, rec.Code)
+			assert.Contains(t, rec.Header().Get("Content-Type"), "text/html")
+			assert.Contains(t, rec.Body.String(), "lancert")
+		})
+	}
+}
+
 func TestIndexAnalyticsOnlyOnCanonicalHost(t *testing.T) {
 	h := newTestHandler(t)
 
@@ -125,6 +153,25 @@ func TestIndexAnalyticsOnlyOnCanonicalHost(t *testing.T) {
 			containsScript := strings.Contains(rec.Body.String(), "analytics.lucor.dev/script.js")
 			assert.Equal(t, test.analytics, containsScript)
 		})
+	}
+}
+
+func TestAnalyticsOnAllHTMLPages(t *testing.T) {
+	h := newTestHandler(t)
+	paths := []string{"/", "/docs", "/docs/api", "/docs/web-servers", "/status", "/missing"}
+
+	for _, host := range []string{"lancert.dev", "preview.lancert.dev"} {
+		for _, path := range paths {
+			t.Run(host+path, func(t *testing.T) {
+				req := httptest.NewRequest(http.MethodGet, path, nil)
+				req.Host = host
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, req)
+
+				containsScript := strings.Contains(rec.Body.String(), "analytics.lucor.dev/script.js")
+				assert.Equal(t, host == "lancert.dev", containsScript)
+			})
+		}
 	}
 }
 

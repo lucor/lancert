@@ -22,7 +22,7 @@ Single-process service with three components:
 
 2. **HTTP API** — `POST /certs/{ip}` to issue a certificate, `GET /certs/{ip}` to fetch it, `GET /certs/{ip}/fullchain.pem` and `GET /certs/{ip}/privkey.pem` for direct PEM downloads, `GET /certs/{ip}/ttl` for remaining validity.
 
-3. **Certificate service** — ACME DNS-01 flow via Let's Encrypt. Each IP gets one certificate covering both `192-168-1-50.lancert.dev` and `*.192-168-1-50.lancert.dev`.
+3. **Certificate service** — ACME DNS-01 flow via Let's Encrypt. Each IP gets one certificate covering both `192-168-1-50.lancert.dev` and `*.192-168-1-50.lancert.dev`. Certificates are renewed automatically using ACME Renewal Information (ARI) when available, with a time-based fallback when ARI cannot be used.
 
 The public `GET /status` page reports aggregate DNS activity, serving stability,
 and current certificate readiness. It observes authoritative DNS queries, not
@@ -56,8 +56,8 @@ curl https://lancert.dev/certs/192.168.1.50
 ## Running
 
 ```bash
-go build -o lancert ./cmd/lancert/
-./lancert -server-ip <PUBLIC_IP> [-acme-env staging] [-email you@example.com]
+mise run build
+./bin/lancert -server-ip <PUBLIC_IP> [-acme-env staging] [-email you@example.com]
 ```
 
 ### Flags
