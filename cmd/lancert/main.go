@@ -143,6 +143,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	staticTXT, err := parseStaticTXT(os.Getenv("LANCERT_STATIC_TXT"), zone)
+	if err != nil {
+		return err
+	}
 
 	// DNS TXT challenge store
 	txtStore := dnssrv.NewTXTStore()
@@ -155,6 +159,7 @@ func run() error {
 		SOAMname:   "ns1." + zone,
 		SOARname:   "admin." + zone,
 		CAAIssuers: []string{"letsencrypt.org"},
+		StaticTXT:  staticTXT,
 		Recorder:   metricRecorder,
 	}
 

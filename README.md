@@ -72,6 +72,21 @@ mise run build
 | `-acme-env` | `production` | ACME authority: `production`, `staging`, or `local` (Pebble) |
 | `-pregen` | `false` | Pre-generate certificates for common IPs at startup |
 
+### Static TXT records
+
+Set `LANCERT_STATIC_TXT` to publish static TXT RRsets for domain-verification
+records. Names are relative to `LANCERT_ZONE`, and `@` identifies the zone apex:
+
+```env
+LANCERT_STATIC_TXT='{"@":{"ttl":300,"values":["verification-value"]}}'
+```
+
+Each name can have multiple values. They share one TTL because they belong to
+the same DNS RRset. The `ttl` property is optional and defaults to 300 seconds.
+Names outside `LANCERT_ZONE` and names below `_acme-challenge` are rejected.
+Static records are loaded at startup, so configuration changes require a
+service restart.
+
 ### Local development with mise
 
 The repository includes a safe local-development profile pinned to Go 1.26.5.

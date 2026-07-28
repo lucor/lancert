@@ -3,6 +3,7 @@ package dnssrv
 import (
 	"context"
 	"net/netip"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -183,6 +184,65 @@ func TestDNS_TXT_ChallengeRecord(t *testing.T) {
 
 	r = query(t, addr, fqdn, dns.TypeTXT)
 	assert.Empty(t, r.Answer)
+}
+
+func TestDNS_TXT_StaticRecords(t *testing.T) {
+	store := NewTXTStore()
+	cfg := Config{
+		Zone:       testZone,
+		NSRecords:  []string{"ns1.lancert.dev.", "ns2.lancert.dev."},
+		ServerIP:   netip.MustParseAddr("5.9.100.1"),
+		SOAMname:   "ns1.lancert.dev.",
+		SOARname:   "admin.lancert.dev.",
+		CAAIssuers: []string{"letsencrypt.org"},
+		StaticTXT: map[string]StaticTXTRecord{
+			testZone: {
+				TTL:    600,
+				Values: []string{"verification-a", "verification-b"},
+			},
+		},
+	}
+	srv := New(cfg, store)
+
+	mux := dns.NewServeMux()
+	mux.HandleFunc(cfg.Zone, srv.handleQuery)
+	srv.udp = &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: mux}
+	started := make(chan struct{})
+	srv.udp.NotifyStartedFunc = func() { close(started) }
+	go func() {
+		if err := srv.udp.ListenAndServe(); err != nil {
+			t.Logf("test dns server: %v", err)
+		}
+	}()
+	<-started
+	t.Cleanup(func() { srv.Shutdown() })
+
+	r := query(t, srv.PacketConnAddr().String(), testZone, dns.TypeTXT)
+	require.Len(t, r.Answer, 2)
+	var values []string
+	for _, answer := range r.Answer {
+		txt, ok := answer.(*dns.TXT)
+		require.True(t, ok)
+		assert.Equal(t, uint32(600), txt.Hdr.Ttl)
+		values = append(values, strings.Join(txt.Txt, ""))
+	}
+	assert.ElementsMatch(t, []string{"verification-a", "verification-b"}, values)
+
+	_, err := store.SetTXTWithCleanup(context.Background(), testZone, "dynamic-challenge", 0)
+	require.NoError(t, err)
+
+	r = query(t, srv.PacketConnAddr().String(), testZone, dns.TypeTXT)
+	require.Len(t, r.Answer, 3)
+	for _, answer := range r.Answer {
+		txt, ok := answer.(*dns.TXT)
+		require.True(t, ok)
+		assert.Zero(t, txt.Hdr.Ttl)
+	}
+}
+
+func TestSplitTXTValue(t *testing.T) {
+	value := strings.Repeat("a", 300)
+	assert.Equal(t, []string{strings.Repeat("a", 255), strings.Repeat("a", 45)}, splitTXTValue(value))
 }
 
 func TestDNS_SOA(t *testing.T) {

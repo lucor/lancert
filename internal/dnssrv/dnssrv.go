@@ -14,8 +14,9 @@
 //   - A: zone apex and NS glue records resolve to the server's public IP;
 //     subdomains resolve to the RFC 1918 IP encoded in the label
 //     (e.g. 192-168-1-50.lancert.dev. → 192.168.1.50).
-//   - TXT: serves ACME DNS-01 challenge values from the in-memory TXTStore.
-//     TTL is 0 so resolvers do not cache them — LE must see the current value.
+//   - TXT: serves declarative verification records and ACME DNS-01 challenge
+//     values. Static records use their configured TTL; challenge records use
+//     TTL 0 so LE must see the current value.
 //   - SOA, NS: required by the DNS protocol for an authoritative zone.
 //   - CAA: restricts certificate issuance to configured CAs (e.g. letsencrypt.org),
 //     preventing misissurance by other CAs even if they are publicly trusted.
@@ -26,12 +27,13 @@
 // queries; TCP is used for responses that exceed the 512-byte UDP limit and
 // is required by some resolvers and the ACME spec.
 //
-// # Why TXT records are in-memory
+// # Why ACME TXT records are in-memory
 //
 // Challenge records are ephemeral: they are created immediately before calling
 // Accept and removed as soon as validation completes (or fails). Persisting
 // them to disk would add latency and complexity with no benefit — they are
-// never needed across restarts.
+// never needed across restarts. Static TXT records are instead reconstructed
+// from startup configuration.
 package dnssrv
 
 import (
@@ -76,9 +78,20 @@ type Config struct {
 	// CAAIssuers is the list of CAs allowed to issue certs (e.g. ["letsencrypt.org"]).
 	CAAIssuers []string
 
+	// StaticTXT contains declarative TXT RRsets keyed by lowercase FQDN.
+	// These records are independent from ephemeral ACME challenge records.
+	StaticTXT map[string]StaticTXTRecord
+
 	// Recorder receives bounded aggregate observations. It must not perform
 	// blocking I/O on the DNS handler path.
 	Recorder Recorder
+}
+
+// StaticTXTRecord is a persistent-by-configuration TXT RRset. All values at
+// the same owner name share one TTL, as required for records in an RRset.
+type StaticTXTRecord struct {
+	TTL    uint32
+	Values []string
 }
 
 // Recorder is implemented by the metrics collector. Keeping this interface
@@ -90,7 +103,7 @@ type Recorder interface {
 
 // Server is an authoritative DNS server for the lancert.dev zone.
 // It resolves A records by parsing the IP from subdomain labels and
-// serves TXT records from the in-memory TXTStore for ACME challenges.
+// serves static TXT records and ACME challenges from separate sources.
 type Server struct {
 	config   Config
 	txtStore *TXTStore
@@ -245,20 +258,44 @@ func (s *Server) handleA(msg *dns.Msg, q dns.Question) {
 	}
 }
 
-// handleTXT serves challenge records from the in-memory store.
+// handleTXT serves configured static records and in-memory challenge records.
 // When no TXT records exist, the SOA is included in the authority section
 // (NODATA response per RFC 2308) so resolvers cache the negative answer
 // for soaMinTTL instead of their own (potentially much longer) default.
 func (s *Server) handleTXT(msg *dns.Msg, q dns.Question) {
 	// Normalize to lowercase: DNS is case-insensitive (RFC 4343) and LE's
 	// validators use 0x20 randomization, sending mixed-case query names.
-	values := s.txtStore.Lookup(strings.ToLower(q.Name))
-	if len(values) == 0 {
+	name := strings.ToLower(q.Name)
+	static := s.config.StaticTXT[name]
+	dynamic := s.txtStore.Lookup(name)
+	if len(static.Values) == 0 && len(dynamic) == 0 {
 		msg.Ns = append(msg.Ns, s.soaRR(s.config.Zone))
 		return
 	}
 
-	for _, v := range values {
+	staticTTL := static.TTL
+	if len(dynamic) > 0 {
+		// parseStaticTXT reserves _acme-challenge, so overlap is not expected
+		// in normal startup configuration. Config can also be constructed
+		// directly, however; if values coexist, use TTL 0 for the entire RRset
+		// as required by RFC 2181 section 5 and appropriate for an active ACME
+		// challenge.
+		staticTTL = 0
+	}
+
+	for _, value := range static.Values {
+		msg.Answer = append(msg.Answer, &dns.TXT{
+			Hdr: dns.RR_Header{
+				Name:   q.Name,
+				Rrtype: dns.TypeTXT,
+				Class:  dns.ClassINET,
+				Ttl:    staticTTL,
+			},
+			Txt: splitTXTValue(value),
+		})
+	}
+
+	for _, value := range dynamic {
 		msg.Answer = append(msg.Answer, &dns.TXT{
 			Hdr: dns.RR_Header{
 				Name:   q.Name,
@@ -266,9 +303,23 @@ func (s *Server) handleTXT(msg *dns.Msg, q dns.Question) {
 				Class:  dns.ClassINET,
 				Ttl:    0,
 			},
-			Txt: []string{v},
+			Txt: []string{value},
 		})
 	}
+}
+
+// splitTXTValue divides a logical TXT value into the 255-byte character
+// strings supported by the DNS wire format. Resolvers concatenate these
+// strings when presenting the value.
+func splitTXTValue(value string) []string {
+	const maxCharacterStringLen = 255
+
+	parts := make([]string, 0, (len(value)+maxCharacterStringLen-1)/maxCharacterStringLen)
+	for len(value) > maxCharacterStringLen {
+		parts = append(parts, value[:maxCharacterStringLen])
+		value = value[maxCharacterStringLen:]
+	}
+	return append(parts, value)
 }
 
 // handleSOA appends the SOA record for the zone.
