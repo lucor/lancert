@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+    tags:
+      - 'v*'
 
 env:
   IMAGE_NAME: ghcr.io/lucor/lancert
@@ -32,6 +34,7 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
+            type=ref,event=tag
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha
 
