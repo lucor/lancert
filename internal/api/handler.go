@@ -389,59 +389,66 @@ func writeCertificateJSON(w http.ResponseWriter, r *http.Request, addr netip.Add
 
 type statusPageData struct {
 	metrics.Snapshot
-	Analytics                bool
-	Version                  string
-	CommitHash               string
-	SuccessPercent           string
-	RecentLookups            string
-	RecentPeriod             string
-	ResponseP95              string
-	LastUpdated              string
-	CertificatesCached       string
-	TotalCertificatesIssued  string
-	CertificatesRenewed      string
-	ARIAdoption              string
-	ARIRenewalSummary        string
-	ARIAdoptionDetail        string
-	HasARIActivity           bool
-	ARIRenewalCount          uint64
-	RenewalCount             uint64
-	ServingCertificatesSince string
-	LookupChart              []lookupChartBar
-	ChartStart               string
-	ChartEnd                 string
-	ChartMax                 uint64
-	HasLookupData            bool
+	Analytics                 bool
+	Version                   string
+	CommitHash                string
+	SuccessPercent            string
+	RecentLookups             string
+	RecentPeriod              string
+	ResponseP95               string
+	LastUpdated               string
+	CertificatesCached        string
+	InitialCertificatesIssued string
+	CertificatesRenewed       string
+	ARIAdoption               string
+	ARIRenewalSummary         string
+	ARIAdoptionDetail         string
+	HasARIActivity            bool
+	ARIRenewalCount           uint64
+	RenewalCount              uint64
+	ServingCertificatesSince  string
+	LookupChart               []lookupChartBar
+	ChartStart                string
+	ChartEnd                  string
+	ChartMax                  uint64
+	HasLookupData             bool
+	AddressBlockChart         []addressBlockBar
 }
 
 type lookupChartBar struct {
-	X       int
-	Y       int
 	Height  int
 	Label   string
 	Queries uint64
+}
+
+type addressBlockBar struct {
+	Name       string
+	Queries    uint64
+	Percentage string
+	Width      int
 }
 
 // handleStatus renders the public aggregate service status page.
 func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s := h.snapshot()
 	data := statusPageData{
-		Snapshot:                s,
-		Analytics:               analyticsHost(r.Host),
-		Version:                 h.build.Version,
-		CommitHash:              h.build.CommitHash,
-		SuccessPercent:          "Not available",
-		RecentLookups:           strconv.FormatUint(s.RecentQueries, 10),
-		RecentPeriod:            "Last 5 minutes",
-		ResponseP95:             "Not available",
-		LastUpdated:             "Not available",
-		CertificatesCached:      "Unavailable",
-		TotalCertificatesIssued: "Unavailable",
-		CertificatesRenewed:     "Unavailable",
-		ARIAdoption:             "Unavailable",
-		ARIAdoptionDetail:       "Certificate metrics unavailable",
+		Snapshot:                  s,
+		Analytics:                 analyticsHost(r.Host),
+		Version:                   h.build.Version,
+		CommitHash:                h.build.CommitHash,
+		SuccessPercent:            "Not available",
+		RecentLookups:             strconv.FormatUint(s.RecentQueries, 10),
+		RecentPeriod:              "Last 5 minutes",
+		ResponseP95:               "Not available",
+		LastUpdated:               "Not available",
+		CertificatesCached:        "Unavailable",
+		InitialCertificatesIssued: "Unavailable",
+		CertificatesRenewed:       "Unavailable",
+		ARIAdoption:               "Unavailable",
+		ARIAdoptionDetail:         "Certificate metrics unavailable",
 	}
 	data.LookupChart, data.ChartStart, data.ChartEnd, data.ChartMax, data.HasLookupData = buildLookupChart(s.DailyLookups)
+	data.AddressBlockChart = buildAddressBlockChart(s.TopBlocks)
 	if !s.FreshAt.IsZero() {
 		data.LastUpdated = s.FreshAt.Format("2 Jan 2006, 15:04 UTC")
 	}
@@ -453,7 +460,7 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.Unavailable {
 		lifecycle := s.CertificateLifecycle
-		data.TotalCertificatesIssued = strconv.FormatUint(lifecycle.TotalIssued, 10)
+		data.InitialCertificatesIssued = strconv.FormatUint(lifecycle.InitialIssuances, 10)
 		data.CertificatesRenewed = strconv.FormatUint(lifecycle.Renewals, 10)
 		data.ARIRenewalCount = lifecycle.ARIRenewals
 		data.RenewalCount = lifecycle.Renewals
@@ -487,6 +494,33 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// buildAddressBlockChart adds relative widths and percentages to the three
+// RFC 1918 block aggregates used by the status page.
+func buildAddressBlockChart(blocks []metrics.Breakdown) []addressBlockBar {
+	var total uint64
+	for _, block := range blocks {
+		total += block.Queries
+	}
+	if total == 0 {
+		return nil
+	}
+	bars := make([]addressBlockBar, 0, len(blocks))
+	for _, block := range blocks {
+		percentage := float64(block.Queries) * 100 / float64(total)
+		width := int(percentage + 0.5)
+		if block.Queries > 0 {
+			width = max(width, 2)
+		}
+		bars = append(bars, addressBlockBar{
+			Name:       block.Name,
+			Queries:    block.Queries,
+			Percentage: fmt.Sprintf("%.1f%%", percentage),
+			Width:      width,
+		})
+	}
+	return bars
+}
+
 // buildLookupChart converts daily lookup totals into status-page chart bars.
 func buildLookupChart(days []metrics.DailyLookup) ([]lookupChartBar, string, string, uint64, bool) {
 	if len(days) == 0 {
@@ -497,14 +531,12 @@ func buildLookupChart(days []metrics.DailyLookup) ([]lookupChartBar, string, str
 		maxQueries = max(maxQueries, day.Queries)
 	}
 	bars := make([]lookupChartBar, 0, len(days))
-	for i, day := range days {
+	for _, day := range days {
 		height := 0
 		if day.Queries > 0 {
-			height = max(2, int(day.Queries*150/maxQueries))
+			height = max(2, int(day.Queries*94/maxQueries))
 		}
 		bars = append(bars, lookupChartBar{
-			X:       10 + i*29,
-			Y:       160 - height,
 			Height:  height,
 			Label:   chartDateLabel(day.Date),
 			Queries: day.Queries,

@@ -71,13 +71,18 @@ func startTestServer(t *testing.T, recorders ...Recorder) (*Server, string) {
 	started := make(chan struct{})
 	srv.udp.NotifyStartedFunc = func() { close(started) }
 
+	serverErr := make(chan error, 1)
 	go func() {
-		if err := srv.udp.ListenAndServe(); err != nil {
-			t.Logf("test dns server: %v", err)
-		}
+		serverErr <- srv.udp.ListenAndServe()
 	}()
 
-	<-started
+	select {
+	case <-started:
+	case err := <-serverErr:
+		require.NoError(t, err, "start test DNS server")
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out starting test DNS server")
+	}
 
 	addr := srv.PacketConnAddr().String()
 	t.Cleanup(func() { srv.Shutdown() })

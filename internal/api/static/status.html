@@ -93,12 +93,33 @@
     .chart-header p { margin: 0; color: var(--muted); font-size: 13px; }
     .chart-peak { flex: 0 0 auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
     .lookup-chart { margin-top: 22px; }
-    .lookup-chart svg { display: block; width: 100%; height: 180px; overflow: visible; }
-    .chart-grid { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
-    .chart-bar { fill: var(--lan); opacity: .82; transition: opacity .15s; }
-    .chart-bar:hover { opacity: 1; }
+    .lookup-plot { position: relative; height: 160px; }
+    .lookup-gridline { position: absolute; right: 0; left: 0; height: 1px; background: var(--line); pointer-events: none; }
+    .lookup-gridline:first-child { top: 0; }
+    .lookup-gridline:nth-child(2) { top: 50%; }
+    .lookup-gridline:nth-child(3) { bottom: 0; }
+    .lookup-bars { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(30, minmax(0, 1fr)); gap: 9px; align-items: end; }
+    .lookup-bar-column { --bar-height: 0%; position: relative; display: flex; align-items: flex-end; justify-content: center; height: 100%; min-width: 0; border-radius: 3px; outline: none; cursor: default; }
+    .lookup-bar-column::after { width: 100%; height: var(--bar-height); min-height: 0; border-radius: 3px 3px 1px 1px; background: var(--lan); opacity: .82; content: ""; transition: opacity .15s, filter .15s; }
+    .lookup-bar-column:hover::after, .lookup-bar-column:focus-visible::after { opacity: 1; filter: saturate(1.15); }
+    .lookup-bar-column:focus-visible { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--lan); }
+    .lookup-tooltip { position: absolute; z-index: 2; bottom: calc(var(--bar-height) + 8px); left: 50%; width: max-content; max-width: 180px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--ink); color: var(--bg); font-size: 12px; line-height: 1.35; text-align: left; white-space: nowrap; opacity: 0; pointer-events: none; transform: translate(-50%, 4px); transition: opacity .12s, transform .12s; }
+    .lookup-tooltip strong { display: block; color: inherit; font-size: 12px; }
+    .lookup-bar-column:hover .lookup-tooltip, .lookup-bar-column:focus-visible .lookup-tooltip { opacity: 1; transform: translate(-50%, 0); }
+    .lookup-bar-column:first-child .lookup-tooltip { left: 0; transform: translate(0, 4px); }
+    .lookup-bar-column:first-child:hover .lookup-tooltip, .lookup-bar-column:first-child:focus-visible .lookup-tooltip { transform: translate(0, 0); }
+    .lookup-bar-column:last-child .lookup-tooltip { right: 0; left: auto; transform: translate(0, 4px); }
+    .lookup-bar-column:last-child:hover .lookup-tooltip, .lookup-bar-column:last-child:focus-visible .lookup-tooltip { transform: translate(0, 0); }
     .chart-axis { display: flex; justify-content: space-between; margin-top: 8px; color: var(--muted); font-size: 11px; }
     .chart-panel > .empty { margin-top: 20px; }
+
+    .block-chart { display: grid; gap: 18px; margin-top: 24px; }
+    .block-chart-row { display: grid; grid-template-columns: 150px minmax(0, 1fr) 130px; align-items: center; gap: 16px; }
+    .block-chart-label { color: var(--ink); font-family: var(--font-mono); font-size: 13px; font-weight: 650; }
+    .block-chart-track { height: 12px; overflow: hidden; border-radius: 99px; background: var(--lan-soft); }
+    .block-chart-fill { display: block; height: 100%; min-width: 2px; border-radius: inherit; background: var(--lan); opacity: .82; }
+    .block-chart-value { color: var(--muted); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+    .block-chart-value strong { color: var(--ink); font-size: 13px; }
 
     progress { width: 100%; height: 5px; margin-top: 18px; border: 0; border-radius: 99px; overflow: hidden; background: var(--line); }
     progress::-webkit-progress-bar { background: var(--line); }
@@ -106,7 +127,7 @@
     progress::-moz-progress-bar { background: var(--cert); border-radius: 99px; }
 
     .certificate-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-    .ari-panel { margin-top: 12px; padding: 20px 24px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+    .ari-panel { margin-top: 12px; }
     .ari-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
     .ari-header h3 { margin-bottom: 3px; }
     .ari-header p { margin: 0; color: var(--muted); font-size: 13px; }
@@ -114,8 +135,13 @@
     .ari-value strong { display: block; color: var(--ink); font-size: 22px; line-height: 1.2; letter-spacing: -.025em; }
     .ari-value span { color: var(--muted); font-size: 12px; }
     .ari-panel progress { margin-top: 16px; }
+    .traffic-details { margin-top: 12px; }
 
-    .tables { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px; }
+    details { border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+    summary { padding: 18px 22px; color: var(--ink); cursor: pointer; font-size: 14px; font-weight: 650; }
+    summary::marker { color: var(--muted); }
+    .details-body { padding: 0 22px 22px; }
+    .tables { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; }
     h3 { margin-bottom: 6px; color: var(--ink); font-size: 15px; }
     .table-note { min-height: 42px; margin-bottom: 12px; color: var(--muted); font-size: 13px; }
     .table-wrap { overflow-x: auto; }
@@ -140,11 +166,13 @@
       .cards, .tables { grid-template-columns: 1fr; }
       .certificate-cards { grid-template-columns: 1fr; }
       .card { min-height: 0; }
-      .ari-panel { padding: 20px; }
       .ari-header { align-items: flex-start; flex-direction: column; gap: 12px; }
       .ari-value { text-align: left; }
       .chart-panel { padding: 20px; }
-      .lookup-chart svg { height: 140px; }
+      .lookup-plot { height: 140px; }
+      .lookup-bars { gap: 5px; }
+      .block-chart-row { grid-template-columns: 1fr auto; gap: 7px 12px; }
+      .block-chart-track { grid-column: 1 / -1; grid-row: 2; }
       .table-note { min-height: 0; }
       .status-summary { align-items: flex-start; flex-direction: column; gap: 8px; }
     }
@@ -179,14 +207,14 @@
           <div class="status-summary"><span class="state limited">Some data is limited</span><p class="updated">Last updated {{.LastUpdated}}</p></div>
           <p class="notice">Part of this report may be incomplete or out of date. {{.Error}} {{.LastFlushError}}</p>
         {{else}}
-          <div class="status-summary"><span class="state">All monitored services are online</span><p class="updated">Last updated {{.LastUpdated}}</p></div>
+          <div class="status-summary"><span class="state">Service operational</span><p class="updated">Last updated {{.LastUpdated}}</p></div>
         {{end}}
       </header>
 
       <section aria-labelledby="dns-heading">
         <div class="section-heading">
           <h2 id="dns-heading">DNS performance</h2>
-          <p>Recent DNS activity and response quality. These numbers count lookups, not people or devices.</p>
+          <p>Recent authoritative DNS activity and response quality. Traffic includes users, resolvers, and automated scanners.</p>
         </div>
         <div class="cards">
           <article class="card">
@@ -221,12 +249,18 @@
           </div>
           {{if .HasLookupData}}
           <div class="lookup-chart">
-            <svg viewBox="0 0 880 160" preserveAspectRatio="none" role="img" aria-label="Daily local address lookups from {{.ChartStart}} to {{.ChartEnd}}">
-              <line class="chart-grid" x1="0" y1="10" x2="880" y2="10"></line>
-              <line class="chart-grid" x1="0" y1="85" x2="880" y2="85"></line>
-              <line class="chart-grid" x1="0" y1="160" x2="880" y2="160"></line>
-              {{range .LookupChart}}<g><title>{{.Label}}: {{.Queries}} lookups</title><rect class="chart-bar" x="{{.X}}" y="{{.Y}}" width="19" height="{{.Height}}" rx="3"></rect></g>{{end}}
-            </svg>
+            <div class="lookup-plot" role="group" aria-label="Daily local address lookups from {{.ChartStart}} to {{.ChartEnd}}">
+              <span class="lookup-gridline"></span>
+              <span class="lookup-gridline"></span>
+              <span class="lookup-gridline"></span>
+              <div class="lookup-bars">
+                {{range .LookupChart}}
+                <div class="lookup-bar-column" style="--bar-height: {{.Height}}%" tabindex="0" aria-label="{{.Label}}: {{.Queries}} lookups">
+                  <span class="lookup-tooltip" aria-hidden="true"><strong>{{.Label}}</strong>{{.Queries}} lookups</span>
+                </div>
+                {{end}}
+              </div>
+            </div>
             <div class="chart-axis"><span>{{.ChartStart}}</span><span>{{.ChartEnd}}</span></div>
           </div>
           {{else}}
@@ -235,40 +269,21 @@
         </div>
       </section>
 
-      <section aria-labelledby="activity-summary-heading">
-        <div class="section-heading">
-          <h2 id="activity-summary-heading">Local address activity</h2>
-          <p>Private IP addresses requested through DNS in the last 30 days. This does not indicate that a certificate exists.</p>
-        </div>
-        <div class="cards">
-          <article class="card">
-            <div class="card-label">Active local addresses</div>
-            <div class="value">{{if .TrackingComplete}}{{.ActiveTargets30D}}{{else}}Unavailable{{end}}</div>
-            <p class="context">Unique private IPv4 addresses requested through DNS</p>
-          </article>
-          <article class="card">
-            <div class="card-label">Active network ranges</div>
-            <div class="value">{{if .TrackingComplete}}{{.ActivePrefixes30D}}{{else}}Unavailable{{end}}</div>
-            <p class="context">Unique /24 ranges containing those addresses</p>
-          </article>
-        </div>
-      </section>
-
       <section aria-labelledby="certificates-heading">
         <div class="section-heading">
-          <h2 id="certificates-heading">Certificates</h2>
-          <p>Certificate availability and successful issuance activity.</p>
+          <h2 id="certificates-heading">Certificate availability</h2>
+          <p>Certificates ready for immediate download and successful lifecycle operations.</p>
         </div>
         <div class="cards certificate-cards">
           <article class="card">
-            <div class="card-label">Certificates cached</div>
+            <div class="card-label">Certificates available</div>
             <div class="value">{{.CertificatesCached}}</div>
-            <p class="context">Available without a new Let’s Encrypt request</p>
+            <p class="context">Ready without a new Let’s Encrypt request</p>
           </article>
           <article class="card">
-            <div class="card-label">Total certificates issued</div>
-            <div class="value">{{.TotalCertificatesIssued}}</div>
-            <p class="context">Includes initial issuances and renewals</p>
+            <div class="card-label">Initial certificates issued</div>
+            <div class="value">{{.InitialCertificatesIssued}}</div>
+            <p class="context">Successful first-time issuances</p>
           </article>
           <article class="card">
             <div class="card-label">Certificates renewed</div>
@@ -276,49 +291,82 @@
             <p class="context">Successful replacements of existing certificates</p>
           </article>
         </div>
-        <article class="ari-panel">
-          <div class="ari-header">
-            <div>
-              <h3>ARI renewal activity</h3>
-              <p>{{.ARIAdoptionDetail}}</p>
+        <details class="ari-panel">
+          <summary>Certificate renewal details</summary>
+          <div class="details-body">
+            <div class="ari-header">
+              <div>
+                <h3>ARI renewal activity</h3>
+                <p>{{.ARIAdoptionDetail}}</p>
+              </div>
+              <div class="ari-value">
+                <strong>{{.ARIAdoption}}</strong>
+                <span>{{.ARIRenewalSummary}}</span>
+              </div>
             </div>
-            <div class="ari-value">
-              <strong>{{.ARIAdoption}}</strong>
-              <span>{{.ARIRenewalSummary}}</span>
-            </div>
+            {{if .HasARIActivity}}<progress value="{{.ARIRenewalCount}}" max="{{.RenewalCount}}" aria-label="ARI adoption"></progress>{{end}}
           </div>
-          {{if .HasARIActivity}}<progress value="{{.ARIRenewalCount}}" max="{{.RenewalCount}}" aria-label="ARI adoption"></progress>{{end}}
-        </article>
+        </details>
       </section>
 
       <section aria-labelledby="activity-heading">
         <div class="section-heading">
-          <h2 id="activity-heading">Where lookups are going</h2>
-          <p>The most requested private address groups in the last 30 days. These are certificate targets, not visitor locations.</p>
+          <h2 id="activity-heading">DNS target activity</h2>
+          <p>Valid private-IP targets observed in DNS queries over the last 30 days. This includes experimentation and automated traffic, not unique users or certificate demand.</p>
         </div>
         {{if .TrackingComplete}}
-        <div class="tables">
-          <div>
-            <h3>Private address blocks</h3>
-            <p class="table-note">Broad RFC 1918 address groups.</p>
-            {{template "breakdown" .TopBlocks}}
-            {{if .OtherBlockQueries}}<p class="other">All others: {{.OtherBlockQueries}} lookups</p>{{end}}
-          </div>
-          <div>
-            <h3>Local network ranges</h3>
-            <p class="table-note">The busiest /24 ranges.</p>
-            {{template "breakdown" .TopPrefixes}}
-            {{if .OtherPrefixQueries}}<p class="other">All others: {{.OtherPrefixQueries}} lookups</p>{{end}}
-          </div>
-          <div>
-            <h3>Local addresses</h3>
-            <p class="table-note">The most requested certificate targets.</p>
-            {{template "breakdown" .TopTargets}}
-            {{if .OtherTargetQueries}}<p class="other">All others: {{.OtherTargetQueries}} lookups</p>{{end}}
-          </div>
+        <div class="cards">
+          <article class="card">
+            <div class="card-label">Unique DNS targets observed</div>
+            <div class="value">{{.ActiveTargets30D}}</div>
+            <p class="context">Private IPv4 addresses in valid DNS queries</p>
+          </article>
+          <article class="card">
+            <div class="card-label">Unique /24 ranges observed</div>
+            <div class="value">{{.ActivePrefixes30D}}</div>
+            <p class="context">Address ranges containing those targets</p>
+          </article>
         </div>
+        <div class="chart-panel">
+          <div class="chart-header">
+            <div>
+              <h3>DNS lookups by private address block</h3>
+              <p>Distribution of valid private-IP lookups over the last 30 days.</p>
+            </div>
+          </div>
+          {{if .AddressBlockChart}}
+          <div class="block-chart" role="img" aria-label="DNS lookup distribution by RFC 1918 private address block">
+            {{range .AddressBlockChart}}
+            <div class="block-chart-row">
+              <span class="block-chart-label">{{.Name}}</span>
+              <span class="block-chart-track"><span class="block-chart-fill" style="width: {{.Width}}%"></span></span>
+              <span class="block-chart-value"><strong>{{.Percentage}}</strong> · {{.Queries}} lookups</span>
+            </div>
+            {{end}}
+          </div>
+          {{else}}
+            <p class="empty">No target activity recorded yet.</p>
+          {{end}}
+        </div>
+        <details class="traffic-details">
+          <summary>DNS traffic details</summary>
+          <div class="details-body tables">
+            <div>
+              <h3>Local network ranges</h3>
+              <p class="table-note">The busiest /24 ranges.</p>
+              {{template "breakdown" .TopPrefixes}}
+              {{if .OtherPrefixQueries}}<p class="other">All others: {{.OtherPrefixQueries}} lookups</p>{{end}}
+            </div>
+            <div>
+              <h3>Local addresses</h3>
+              <p class="table-note">The most frequently observed DNS targets.</p>
+              {{template "breakdown" .TopTargets}}
+              {{if .OtherTargetQueries}}<p class="other">All others: {{.OtherTargetQueries}} lookups</p>{{end}}
+            </div>
+          </div>
+        </details>
         {{else}}
-          <p class="empty">This breakdown is unavailable because some address activity was not tracked in the last 30 days.</p>
+          <p class="empty">DNS target activity is unavailable because some observations were not tracked in the last 30 days.</p>
         {{end}}
       </section>
     </main>
