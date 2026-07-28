@@ -8,6 +8,7 @@
 //	  200  certificate bundle (cert already cached and usable)
 //	  202  issuance triggered, poll GET (Retry-After: 10)
 //	  400  invalid or non-RFC-1918 IP
+//	  429  per-client initial issuance allowance exhausted
 //
 //	GET /certs/{ip}
 //	  200  certificate bundle (issuance complete, with ETag)

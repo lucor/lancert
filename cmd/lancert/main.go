@@ -213,6 +213,7 @@ func run() error {
 	realIP := api.NewRealIP(proxySubnet)
 	ipHasher := api.NewIPHasher(ipHashSecret)
 	issuanceLimiter := api.NewRateLimiter(ctx, api.IssuanceRPS, api.IssuanceBurst)
+	initialIssuanceLimiter := api.NewInitialIssuanceRateLimiter(ctx)
 	certificateReadLimiter := api.NewRateLimiter(ctx, api.CertificateReadRPS, api.CertificateReadBurst)
 
 	// HTTP API with middleware stack
@@ -225,7 +226,7 @@ func run() error {
 	apiHandler := api.NewWithBuildInfo(certSvc, statusSnapshot, api.BuildInfo{
 		Version:    buildVersion,
 		CommitHash: shortCommitHash(commitHash),
-	})
+	}, api.WithInitialIssuanceLimiter(initialIssuanceLimiter))
 	handler := api.Chain(apiHandler,
 		api.Recover,
 		api.SecurityHeaders,

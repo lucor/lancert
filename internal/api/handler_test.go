@@ -1,9 +1,19 @@
 package api
 
 import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -193,6 +203,69 @@ func TestGetCert_InvalidIP(t *testing.T) {
 	h.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestIssueCertInitialIssuanceRateLimit(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	limiter := NewInitialIssuanceRateLimiter(ctx)
+	const clientKey = "client-a"
+	for range InitialIssuanceBurst {
+		assert.True(t, limiter.Allow(clientKey))
+	}
+
+	store := certstore.New(t.TempDir())
+	svc := certservice.New(certservice.Config{Zone: "lancert.dev", Environment: acmeissue.EnvironmentStaging}, store, dnssrv.NewTXTStore(), metrics.Disabled{})
+	h := New(svc, nil, WithInitialIssuanceLimiter(limiter))
+	req := httptest.NewRequest(http.MethodPost, "/certs/192.168.1.50", nil)
+	req = req.WithContext(WithIssuanceClientKey(req.Context(), clientKey))
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+	retryAfter := rec.Header().Get("Retry-After")
+	assert.NotEmpty(t, retryAfter)
+	seconds, err := strconv.Atoi(retryAfter)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, seconds, int(InitialIssuanceRefill/time.Second))
+	assert.Contains(t, rec.Body.String(), "initial certificate issuance rate limit exceeded")
+}
+
+func TestIssueCertCachedDoesNotConsumeInitialIssuanceCredit(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	limiter := NewInitialIssuanceRateLimiter(ctx)
+	const clientKey = "client-cache"
+	for range InitialIssuanceBurst - 1 {
+		require.True(t, limiter.Allow(clientKey))
+	}
+
+	store := certstore.New(t.TempDir())
+	addr := netip.MustParseAddr("192.168.1.50")
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	now := time.Now()
+	certDER, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "cached"},
+		DNSNames:  []string{"cached.lancert.dev"},
+		NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour),
+	}, &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour)}, &key.PublicKey, key)
+	require.NoError(t, err)
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	require.NoError(t, err)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	require.NoError(t, store.Save(addr, keyPEM, [][]byte{certDER}))
+
+	svc := certservice.New(certservice.Config{Zone: "lancert.dev", Environment: acmeissue.EnvironmentStaging}, store, dnssrv.NewTXTStore(), metrics.Disabled{})
+	h := New(svc, nil, WithInitialIssuanceLimiter(limiter))
+	req := httptest.NewRequest(http.MethodPost, "/certs/192.168.1.50", nil).WithContext(WithIssuanceClientKey(context.Background(), clientKey))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	// The cached request did not consume the last available token.
+	require.True(t, limiter.Allow(clientKey))
 }
 
 func TestGetFullChain_NotFound(t *testing.T) {

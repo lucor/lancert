@@ -29,6 +29,14 @@ const (
 	CertificateReadRPS rate.Limit = 0.1
 
 	CertificateReadBurst = 3
+
+	// InitialIssuanceBurst lets a new client provision a small local cluster
+	// immediately. Only cache misses that actually start issuance consume it.
+	InitialIssuanceBurst = 10
+
+	// InitialIssuanceRefill prevents one client from monopolizing the shared
+	// certificate authority capacity after its initial provisioning burst.
+	InitialIssuanceRefill = 24 * time.Hour
 )
 
 // RateLimiter tracks per-key request rates using token buckets.
@@ -82,18 +90,41 @@ func NewRateLimiter(ctx context.Context, rps rate.Limit, burst int) *RateLimiter
 	return rl
 }
 
+// NewInitialIssuanceRateLimiter creates the slow per-client limiter for new
+// certificate issuance. Cached certificates and existing in-flight issuance
+// do not pass through this limiter.
+func NewInitialIssuanceRateLimiter(ctx context.Context) *RateLimiter {
+	return NewRateLimiter(ctx, rate.Every(InitialIssuanceRefill), InitialIssuanceBurst)
+}
+
 // Allow reports whether a request with the given key should be permitted.
 func (rl *RateLimiter) Allow(key string) bool {
+	allowed, _ := rl.AllowWithRetry(key)
+	return allowed
+}
+
+// AllowWithRetry reports whether key may proceed and, when denied, how long it
+// must wait for the next token. Checking and calculating the delay use the same
+// limiter instant so the result is consistent under concurrent requests.
+func (rl *RateLimiter) AllowWithRetry(key string) (bool, time.Duration) {
 	rl.mu.Lock()
 	e, ok := rl.entries[key]
 	if !ok {
 		e = &rateLimiterEntry{limiter: rate.NewLimiter(rl.rps, rl.burst)}
 		rl.entries[key] = e
 	}
-	e.lastSeen = time.Now()
+	now := time.Now()
+	e.lastSeen = now
 	rl.mu.Unlock()
 
-	return e.limiter.Allow()
+	if e.limiter.AllowN(now, 1) {
+		return true, 0
+	}
+
+	reservation := e.limiter.ReserveN(now, 1)
+	delay := reservation.DelayFrom(now)
+	reservation.CancelAt(now)
+	return false, delay
 }
 
 // cleanup periodically removes entries idle for longer than idleTTL.

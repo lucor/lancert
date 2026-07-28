@@ -129,9 +129,10 @@ type issueRecord struct {
 
 // IssueStatus is the result of GetStatus — exactly one field is set.
 type IssueStatus struct {
-	Bundle  *certstore.CertBundle // non-nil: usable cert on disk
-	Pending bool                  // issuance in progress
-	Fail    *FailInfo             // non-nil: recent failure
+	Bundle      *certstore.CertBundle // non-nil: usable cert on disk
+	Pending     bool                  // issuance in progress
+	RateLimited bool                  // a new issuance was denied by local admission
+	Fail        *FailInfo             // non-nil: recent failure
 }
 
 // FailInfo exposes failure details to the handler layer.
@@ -283,6 +284,13 @@ func (s *Service) LoadUsable(addr netip.Addr) (*certstore.CertBundle, error) {
 // is not already pending and there is no recent failure in cooldown.
 // Returns the current IssueStatus so the caller can respond immediately.
 func (s *Service) TriggerIssuance(addr netip.Addr) IssueStatus {
+	return s.TriggerIssuanceIf(addr, nil)
+}
+
+// TriggerIssuanceIf starts issuance only when admit permits new work. The
+// callback runs after pending and failure checks, while the service lock is
+// held, so duplicate requests do not consume admission tokens.
+func (s *Service) TriggerIssuanceIf(addr netip.Addr, admit func() bool) IssueStatus {
 	key := addr.String()
 
 	s.mu.Lock()
@@ -298,6 +306,9 @@ func (s *Service) TriggerIssuance(addr netip.Addr) IssueStatus {
 			return IssueStatus{Fail: &FailInfo{Status: rec.fail.status, Msg: rec.fail.err.Error(), RetryAfter: rec.fail.retryAfter}}
 		}
 		// Expired failure — fall through to re-trigger.
+	}
+	if admit != nil && !admit() {
+		return IssueStatus{RateLimited: true}
 	}
 
 	// Mark pending and launch background goroutine.

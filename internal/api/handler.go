@@ -91,20 +91,29 @@ type pageData struct {
 
 // Handler serves the lancert.dev HTTP API.
 type Handler struct {
-	service  *certservice.Service
-	mux      *http.ServeMux
-	snapshot func() metrics.Snapshot
-	build    BuildInfo
+	service                *certservice.Service
+	mux                    *http.ServeMux
+	snapshot               func() metrics.Snapshot
+	build                  BuildInfo
+	initialIssuanceLimiter *RateLimiter
+}
+
+// HandlerOption configures optional API behavior.
+type HandlerOption func(*Handler)
+
+// WithInitialIssuanceLimiter limits only cache misses that start new issuance.
+func WithInitialIssuanceLimiter(limiter *RateLimiter) HandlerOption {
+	return func(h *Handler) { h.initialIssuanceLimiter = limiter }
 }
 
 // New creates an API handler wired to the certificate service and status
 // snapshot provider.
-func New(svc *certservice.Service, snapshot func() metrics.Snapshot) *Handler {
-	return NewWithBuildInfo(svc, snapshot, BuildInfo{Version: "dev", CommitHash: "dev"})
+func New(svc *certservice.Service, snapshot func() metrics.Snapshot, options ...HandlerOption) *Handler {
+	return NewWithBuildInfo(svc, snapshot, BuildInfo{Version: "dev", CommitHash: "dev"}, options...)
 }
 
 // NewWithBuildInfo creates an API handler with build metadata for the status page.
-func NewWithBuildInfo(svc *certservice.Service, snapshot func() metrics.Snapshot, build BuildInfo) *Handler {
+func NewWithBuildInfo(svc *certservice.Service, snapshot func() metrics.Snapshot, build BuildInfo, options ...HandlerOption) *Handler {
 	provider := func() metrics.Snapshot { return metrics.UnavailableSnapshot(nil) }
 	if snapshot != nil {
 		provider = snapshot
@@ -113,6 +122,9 @@ func NewWithBuildInfo(svc *certservice.Service, snapshot func() metrics.Snapshot
 		service:  svc,
 		snapshot: provider,
 		build:    build,
+	}
+	for _, option := range options {
+		option(h)
 	}
 	h.mux = http.NewServeMux()
 	h.registerRoutes()
@@ -170,8 +182,31 @@ func (h *Handler) handleIssueCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Trigger background issuance (idempotent).
-	status := h.service.TriggerIssuance(addr)
+	// Trigger background issuance (idempotent). Admission is checked inside the
+	// service only after it knows this request will start new work.
+	var retryAfter time.Duration
+	status := h.service.TriggerIssuanceIf(addr, func() bool {
+		if h.initialIssuanceLimiter == nil {
+			return true
+		}
+		key, ok := IssuanceClientKeyFromContext(r.Context())
+		if !ok {
+			return false
+		}
+		allowed, retry := h.initialIssuanceLimiter.AllowWithRetry(key)
+		retryAfter = retry
+		return allowed
+	})
+
+	if status.RateLimited {
+		if _, ok := IssuanceClientKeyFromContext(r.Context()); !ok {
+			slog.Error("initial issuance limiter: missing client key")
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+		writeErrorRetry(w, http.StatusTooManyRequests, "initial certificate issuance rate limit exceeded, try again later", retryAfter)
+		return
+	}
 
 	if status.Fail != nil {
 		writeErrorRetry(w, status.Fail.Status, status.Fail.Msg, status.Fail.RetryAfter)
@@ -598,12 +633,11 @@ func writeError(w http.ResponseWriter, status int, message string) {
 
 // writeErrorRetry writes an error response with an optional Retry-After header.
 func writeErrorRetry(w http.ResponseWriter, status int, message string, retryAfter time.Duration) {
-	if status >= 500 {
-		seconds := int(retryAfter.Seconds())
-		if seconds <= 0 {
-			seconds = 3600
-		}
+	seconds := int((retryAfter + time.Second - 1) / time.Second)
+	if seconds > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(seconds))
+	} else if status >= 500 {
+		w.Header().Set("Retry-After", "3600")
 	}
 	writeJSON(w, status, map[string]string{"error": message})
 }

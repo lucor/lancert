@@ -167,8 +167,13 @@ paths:
       description: |
         Triggers certificate issuance for the given IP. Returns immediately
         with 200 if a usable certificate is already cached, or 202 to indicate
-        issuance is in progress. Rate limited to 1 req/s with burst of 3 per
-        source IP.
+        issuance is in progress. All POST requests are rate limited to 1 req/s
+        with a burst of 3 per source IP. A cache miss that starts new issuance
+        additionally consumes a per-client allowance with a burst of 10 and a
+        refill of one certificate every 24 hours. Cache hits, requests for an
+        issuance already in progress, failures still in cooldown, and
+        background renewals do not consume that allowance. IPv6 clients are
+        grouped by /64.
       responses:
         "200":
           description: Usable certificate already exists.
@@ -181,12 +186,12 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
         "429":
-          description: Rate limit exceeded. Only applies to this endpoint.
+          description: Request or initial certificate issuance rate limit exceeded.
           headers:
             Retry-After:
               schema:
                 type: integer
-                examples: [1]
+                examples: [1, 86400]
           content:
             application/json:
               schema:

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -37,4 +38,25 @@ func TestCertificateReadMiddleware(t *testing.T) {
 
 	assert.Equal(t, http.StatusNoContent, request(http.MethodPost, "/certs/192.168.1.50").Code)
 	assert.Equal(t, http.StatusNoContent, request(http.MethodGet, "/health").Code)
+}
+
+func TestInitialIssuanceRateLimiter(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	limiter := NewInitialIssuanceRateLimiter(ctx)
+
+	for range InitialIssuanceBurst {
+		allowed, retryAfter := limiter.AllowWithRetry("client-a")
+		assert.True(t, allowed)
+		assert.Zero(t, retryAfter)
+	}
+
+	allowed, retryAfter := limiter.AllowWithRetry("client-a")
+	assert.False(t, allowed)
+	assert.Greater(t, retryAfter, 23*time.Hour)
+	assert.LessOrEqual(t, retryAfter, InitialIssuanceRefill)
+
+	allowed, retryAfter = limiter.AllowWithRetry("client-b")
+	assert.True(t, allowed)
+	assert.Zero(t, retryAfter)
 }
