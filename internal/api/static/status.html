@@ -76,6 +76,10 @@
     .status-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
     .updated { margin: 0; color: var(--muted); font-size: 13px; }
     .notice { margin: 24px 0 0; max-width: 760px; padding: 14px 16px; border-left: 3px solid var(--warning); border-radius: 0 8px 8px 0; background: var(--warning-soft); color: #6e5426; }
+    .operations { display: grid; max-width: 760px; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 20px; }
+    .operation { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font-size: 13px; font-weight: 650; }
+    .operation span { color: #376a57; }
+    .operation.suspended span { color: var(--warning); }
 
     section { padding: 48px 0; border-top: 1px solid var(--line); }
     .section-heading { display: grid; grid-template-columns: minmax(180px, 1fr) 2fr; gap: 32px; margin-bottom: 24px; }
@@ -175,6 +179,7 @@
       .block-chart-track { grid-column: 1 / -1; grid-row: 2; }
       .table-note { min-height: 0; }
       .status-summary { align-items: flex-start; flex-direction: column; gap: 8px; }
+      .operations { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -200,7 +205,17 @@
           <span class="build-version-label">Version</span>
           <span>{{if eq .Version "dev"}}{{.Version}}{{else}}<a href="https://github.com/lucor/lancert/releases/tag/{{.Version}}" target="_blank" rel="noopener">{{.Version}}</a>{{end}} ({{.CommitHash}})</span>
         </div>
-        {{if .Unavailable}}
+        {{if .Suspended}}
+          <div class="status-summary"><span class="state limited">Certificate operations suspended</span><p class="updated">Since 29 July 2026</p></div>
+          <p class="notice">Certificate issuance, renewal, and downloads are temporarily suspended while Lancert reviews its certificate distribution model. <a href="/notice">Read the notice</a>.</p>
+          <div class="operations" aria-label="Service component status">
+            <div class="operation">DNS <span>Operational</span></div>
+            <div class="operation">Website <span>Operational</span></div>
+            <div class="operation suspended">Certificate issuance <span>Suspended</span></div>
+            <div class="operation suspended">Certificate downloads <span>Suspended</span></div>
+            <div class="operation suspended">Certificate renewal <span>Suspended</span></div>
+          </div>
+        {{else if .Unavailable}}
           <div class="status-summary"><span class="state unavailable">Status data unavailable</span></div>
           <p class="notice">We cannot load status data right now. DNS and certificate delivery continue to run independently.</p>
         {{else if .Degraded}}
@@ -272,13 +287,17 @@
       <section aria-labelledby="certificates-heading">
         <div class="section-heading">
           <h2 id="certificates-heading">Certificate availability</h2>
+          {{if .Suspended}}
+          <p>Historical certificate totals retained for visibility. Certificate operations are not currently active.</p>
+          {{else}}
           <p>Certificates ready for immediate download and successful lifecycle operations.</p>
+          {{end}}
         </div>
         <div class="cards certificate-cards">
           <article class="card">
-            <div class="card-label">Certificates available</div>
+            <div class="card-label">{{if .Suspended}}Certificates stored{{else}}Certificates available{{end}}</div>
             <div class="value">{{.CertificatesCached}}</div>
-            <p class="context">Ready without a new Let’s Encrypt request</p>
+            <p class="context">{{if .Suspended}}Historical inventory; downloads are suspended{{else}}Ready without a new Let’s Encrypt request{{end}}</p>
           </article>
           <article class="card">
             <div class="card-label">Initial certificates issued</div>

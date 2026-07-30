@@ -139,6 +139,22 @@
     margin: 0 auto;
   }
 
+  .suspension-banner {
+    max-width: 992px;
+    margin: 28px auto 0;
+    padding: 18px 20px;
+    border: 1px solid #f0dfbd;
+    border-radius: 10px;
+    background: #fff7e7;
+    color: #6e5426;
+  }
+
+  .suspension-banner strong {
+    display: block;
+    margin-bottom: 3px;
+    color: var(--ink);
+  }
+
   /* ── TERMINAL ── */
   .terminal {
     background: #1e1e1e;
@@ -561,6 +577,14 @@
     </a>
   </div>
 </nav>
+
+{{if .Suspended}}
+<aside class="suspension-banner" aria-label="Certificate operations notice">
+  <strong>Certificate issuance temporarily suspended</strong>
+  Lancert has paused certificate issuance, renewal, and downloads while reviewing a compliance concern affecting the current certificate distribution model. Existing DNS records remain operational.
+  <a href="/notice">Read the notice</a>.
+</aside>
+{{end}}
 
 <main>
 <header class="hero">

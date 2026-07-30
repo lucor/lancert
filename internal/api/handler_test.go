@@ -45,6 +45,23 @@ func newTestHandler(t *testing.T) *Handler {
 	return New(svc, nil)
 }
 
+func newSuspendedTestHandler(t *testing.T) http.Handler {
+	t.Helper()
+
+	store := certstore.New(t.TempDir())
+	svc := certservice.New(
+		certservice.Config{
+			Zone:        "lancert.dev",
+			Environment: acmeissue.EnvironmentStaging,
+			Suspended:   true,
+		},
+		store,
+		dnssrv.NewTXTStore(),
+		metrics.Disabled{},
+	)
+	return Chain(New(svc, nil), CertificateSuspension(svc))
+}
+
 func TestHealth(t *testing.T) {
 	h := newTestHandler(t)
 
@@ -144,6 +161,75 @@ func TestDocsPages(t *testing.T) {
 			assert.Contains(t, rec.Body.String(), "lancert")
 		})
 	}
+}
+
+func TestSuspendedCertificateEndpoints(t *testing.T) {
+	h := newSuspendedTestHandler(t)
+	tests := []struct {
+		method string
+		path   string
+		code   string
+	}{
+		{method: http.MethodPost, path: "/certs/192.168.1.50", code: issuanceSuspendedCode},
+		{method: http.MethodGet, path: "/certs/192.168.1.50", code: downloadSuspendedCode},
+		{method: http.MethodGet, path: "/certs/192.168.1.50/fullchain.pem", code: downloadSuspendedCode},
+		{method: http.MethodGet, path: "/certs/192.168.1.50/privkey.pem", code: downloadSuspendedCode},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(tt.method, tt.path, nil))
+
+			require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+			require.Equal(t, suspensionRetryAfter, rec.Header().Get("Retry-After"))
+			var body map[string]string
+			require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+			require.Equal(t, tt.code, body["error"])
+			require.Contains(t, body["message"], "temporarily suspended")
+		})
+	}
+}
+
+func TestSuspendedPublicPagesAndDocs(t *testing.T) {
+	h := newSuspendedTestHandler(t)
+
+	for _, tt := range []struct {
+		path     string
+		contains []string
+	}{
+		{path: "/", contains: []string{"Certificate issuance temporarily suspended", "/notice"}},
+		{path: "/notice", contains: []string{"Certificate issuance temporarily suspended", "Existing DNS records remain operational"}},
+		{path: "/status", contains: []string{"Certificate operations suspended", "DNS", "Operational", "Certificate renewal", "Suspended", "/notice"}},
+		{path: "/health", contains: []string{`"status":"ok"`}},
+	} {
+		t.Run(tt.path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tt.path, nil))
+			require.Equal(t, http.StatusOK, rec.Code)
+			for _, want := range tt.contains {
+				require.Contains(t, rec.Body.String(), want)
+			}
+		})
+	}
+
+	for _, path := range []string{"/docs", "/docs/api", "/docs/web-servers"} {
+		t.Run(path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+			require.Equal(t, http.StatusTemporaryRedirect, rec.Code)
+			require.Equal(t, "/notice", rec.Header().Get("Location"))
+		})
+	}
+}
+
+func TestSuspendedTTLRemainsAvailable(t *testing.T) {
+	h := newSuspendedTestHandler(t)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/certs/192.168.1.50/ttl", nil))
+
+	require.Equal(t, http.StatusNotFound, rec.Code)
+	require.NotContains(t, rec.Body.String(), "suspended")
 }
 
 func TestIndexAnalyticsOnlyOnCanonicalHost(t *testing.T) {

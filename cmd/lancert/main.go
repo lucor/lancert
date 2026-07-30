@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"errors"
 	"flag"
 	"fmt"
@@ -52,13 +53,14 @@ func run() error {
 	_ = godotenv.Load()
 
 	var (
-		dnsAddr  string
-		httpAddr string
-		dataDir  string
-		email    string
-		serverIP string
-		acmeEnv  string
-		pregen   bool
+		dnsAddr   string
+		httpAddr  string
+		dataDir   string
+		email     string
+		serverIP  string
+		acmeEnv   string
+		pregen    bool
+		suspended bool
 	)
 
 	flag.StringVar(&dnsAddr, "dns-addr", envOr("LANCERT_DNS_ADDR", defaultDNSAddr), "DNS listen address")
@@ -68,6 +70,7 @@ func run() error {
 	flag.StringVar(&serverIP, "server-ip", envOr("LANCERT_SERVER_IP", ""), "public IP of this server (required, used for DNS A records)")
 	flag.StringVar(&acmeEnv, "acme-env", envOr("LANCERT_ACME_ENV", ""), "ACME environment: production, staging, or local")
 	flag.BoolVar(&pregen, "pregen", envBool("LANCERT_PREGEN"), "pre-generate certificates for common IPs at startup")
+	flag.BoolVar(&suspended, "suspended", envBool("LANCERT_SUSPENDED"), "suspend certificate issuance, renewal, and downloads")
 	flag.Parse()
 	if acmeEnv == "" {
 		acmeEnv = string(acmeissue.EnvironmentProduction)
@@ -86,19 +89,25 @@ func run() error {
 		return fmt.Errorf("invalid -server-ip: %w", err)
 	}
 
-	// Load or create ACME account key
-	acctKeyPath := filepath.Join(dataDir, "account-key.pem")
-	accountKey, err := accountkey.LoadOrCreate(acctKeyPath)
-	if err != nil {
-		return err
+	var accountKey *ecdsa.PrivateKey
+	if !suspended {
+		// Load or create the ACME account key only when certificate operations
+		// are enabled. Suspended mode must not mutate ACME material.
+		acctKeyPath := filepath.Join(dataDir, "account-key.pem")
+		accountKey, err = accountkey.LoadOrCreate(acctKeyPath)
+		if err != nil {
+			return err
+		}
+		slog.Info("account key loaded", "path", acctKeyPath)
 	}
-	slog.Info("account key loaded", "path", acctKeyPath)
 
 	// Certificate store
 	certsDir := filepath.Join(dataDir, "certs")
 	store := certstore.New(certsDir)
-	if err := store.MigrateLegacy(); err != nil {
-		return fmt.Errorf("migrate certificate store: %w", err)
+	if !suspended {
+		if err := store.MigrateLegacy(); err != nil {
+			return fmt.Errorf("migrate certificate store: %w", err)
+		}
 	}
 	slog.Info("cert store ready", "path", certsDir, "count", store.Count())
 
@@ -174,6 +183,7 @@ func run() error {
 			Environment: environment,
 			CACertPath:  caCertPath,
 			Resolver:    resolver,
+			Suspended:   suspended,
 		},
 		store,
 		txtStore,
@@ -237,6 +247,7 @@ func run() error {
 		api.SecurityHeaders,
 		realIP.Middleware,
 		ipHasher.Middleware,
+		api.CertificateSuspension(certSvc),
 		issuanceLimiter.Middleware,
 		certificateReadLimiter.CertificateReadMiddleware,
 		api.RequestLogging,

@@ -9,6 +9,7 @@
 //	  202  issuance triggered, poll GET (Retry-After: 10)
 //	  400  invalid or non-RFC-1918 IP
 //	  429  per-client initial issuance allowance exhausted
+//	  503  certificate issuance temporarily suspended
 //
 //	GET /certs/{ip}
 //	  200  certificate bundle (issuance complete, with ETag)
@@ -19,6 +20,7 @@
 //	  502  ACME authorization failure (LE rejected the challenge)
 //	  504  DNS propagation timeout (TXT record not visible within 5 min)
 //	  5xx responses also include Retry-After: 3600
+//	  503  certificate downloads temporarily suspended
 //
 //	GET /certs/{ip}/ttl
 //	  200  remaining validity in seconds as plain text

@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"lucor.dev/lancert/internal/certservice"
 )
 
 // Middleware wraps an http.Handler.
@@ -51,6 +53,53 @@ func RequestLogging(next http.Handler) http.Handler {
 			"client_ip", ip,
 		)
 	})
+}
+
+const (
+	suspensionRetryAfter     = "86400"
+	issuanceSuspendedCode    = "certificate_issuance_suspended"
+	downloadSuspendedCode    = "certificate_download_suspended"
+	issuanceSuspendedMessage = "Certificate issuance is temporarily suspended while Lancert reviews its certificate distribution model."
+	downloadSuspendedMessage = "Certificate downloads are temporarily suspended while Lancert reviews its certificate distribution model."
+)
+
+// CertificateSuspension blocks certificate issuance and material distribution
+// while leaving TTL, health, status, static pages, and DNS unaffected.
+func CertificateSuspension(service *certservice.Service) Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !service.Suspended() {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			code := ""
+			event := ""
+			message := ""
+			switch {
+			case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/certs/"):
+				code = issuanceSuspendedCode
+				event = "certificate issuance request blocked"
+				message = issuanceSuspendedMessage
+			case r.Method == http.MethodGet &&
+				strings.HasPrefix(r.URL.Path, "/certs/") &&
+				!strings.HasSuffix(r.URL.Path, "/ttl"):
+				code = downloadSuspendedCode
+				event = "certificate download request blocked"
+				message = downloadSuspendedMessage
+			default:
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			slog.Info(event, "path", r.URL.Path)
+			w.Header().Set("Retry-After", suspensionRetryAfter)
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"error":   code,
+				"message": message,
+			})
+		})
+	}
 }
 
 // GzipResponse compresses responses with gzip when the client accepts it.

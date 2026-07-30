@@ -53,6 +53,10 @@ const pregenDelay = 10 * time.Second
 // progress but does not return errors — individual failures are skipped.
 // Meant to be called in a goroutine at startup.
 func (s *Service) Pregen(ctx context.Context) {
+	if s.Suspended() {
+		return
+	}
+
 	total := len(PregenIPs)
 	issued := 0
 	skipped := 0

@@ -74,6 +74,7 @@ package certservice
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -100,6 +101,9 @@ const (
 	RenewalWindow = 30 * 24 * time.Hour
 )
 
+// ErrSuspended reports that certificate operations are temporarily disabled.
+var ErrSuspended = errors.New("certificate issuance and renewal are suspended")
+
 // Config holds the service configuration.
 type Config struct {
 	Zone        string
@@ -108,6 +112,7 @@ type Config struct {
 	Environment acmeissue.Environment
 	CACertPath  string
 	Resolver    *net.Resolver
+	Suspended   bool
 }
 
 // failRecord holds information about a failed issuance attempt.
@@ -132,6 +137,7 @@ type IssueStatus struct {
 	Bundle      *certstore.CertBundle // non-nil: usable cert on disk
 	Pending     bool                  // issuance in progress
 	RateLimited bool                  // a new issuance was denied by local admission
+	Suspended   bool                  // certificate operations are disabled
 	Fail        *FailInfo             // non-nil: recent failure
 }
 
@@ -149,11 +155,13 @@ const issuanceTimeout = 12 * time.Minute
 
 // Service orchestrates certificate issuance and caching.
 type Service struct {
-	config   Config
-	store    *certstore.Store
-	txtStore dnssrv.TXTHandler
-	metrics  metrics.Recorder
-	sfGroup  singleflight.Group // deduplicates concurrent issuance for the same IP
+	config           Config
+	store            *certstore.Store
+	txtStore         dnssrv.TXTHandler
+	metrics          metrics.Recorder
+	issueCertificate func(context.Context, acmeissue.Request) (*acmeissue.Result, error)
+	getRenewalInfo   func(context.Context, *x509.Certificate, acmeissue.Environment, string) (acmeissue.RenewalInfo, error)
+	sfGroup          singleflight.Group // deduplicates concurrent issuance for the same IP
 
 	mu     sync.Mutex
 	issues map[string]*issueRecord
@@ -165,17 +173,29 @@ func New(cfg Config, store *certstore.Store, txtStore dnssrv.TXTHandler, recorde
 		cfg.Environment = acmeissue.EnvironmentProduction
 	}
 	return &Service{
-		config:   cfg,
-		store:    store,
-		txtStore: txtStore,
-		metrics:  recorder,
-		issues:   make(map[string]*issueRecord),
+		config:           cfg,
+		store:            store,
+		txtStore:         txtStore,
+		metrics:          recorder,
+		issueCertificate: acmeissue.Issue,
+		getRenewalInfo:   acmeissue.GetRenewalInfo,
+		issues:           make(map[string]*issueRecord),
 	}
+}
+
+// Suspended reports whether certificate issuance, renewal, and distribution
+// should be disabled by callers.
+func (s *Service) Suspended() bool {
+	return s.config.Suspended
 }
 
 // GetOrIssue returns an existing valid certificate or issues a new one.
 // Concurrent requests for the same IP are deduplicated via singleflight.
 func (s *Service) GetOrIssue(ctx context.Context, addr netip.Addr) (*certstore.CertBundle, error) {
+	if s.Suspended() {
+		return nil, ErrSuspended
+	}
+
 	// Fast path: valid cert already on disk.
 	bundle, err := s.store.Load(addr)
 	if err != nil {
@@ -199,6 +219,10 @@ func (s *Service) GetOrIssue(ctx context.Context, addr netip.Addr) (*certstore.C
 // issue performs the double-check, ACME issuance, and disk write.
 // Called exclusively from GetOrIssue inside the singleflight group.
 func (s *Service) issue(ctx context.Context, addr netip.Addr) (*certstore.CertBundle, error) {
+	if s.Suspended() {
+		return nil, ErrSuspended
+	}
+
 	// Double-check: a previous in-flight call may have just issued and stored.
 	bundle, err := s.store.Load(addr)
 	if err != nil {
@@ -213,7 +237,7 @@ func (s *Service) issue(ctx context.Context, addr netip.Addr) (*certstore.CertBu
 	domains := privateip.Domains(addr, s.config.Zone)
 	slog.Info("certservice: issuing cert", "addr", addr, "domains", domains)
 
-	result, err := acmeissue.Issue(ctx, acmeissue.Request{
+	result, err := s.issueCertificate(ctx, acmeissue.Request{
 		Domains:     domains[:],
 		Email:       s.config.Email,
 		AccountKey:  s.config.AccountKey,
@@ -291,6 +315,10 @@ func (s *Service) TriggerIssuance(addr netip.Addr) IssueStatus {
 // callback runs after pending and failure checks, while the service lock is
 // held, so duplicate requests do not consume admission tokens.
 func (s *Service) TriggerIssuanceIf(addr netip.Addr, admit func() bool) IssueStatus {
+	if s.Suspended() {
+		return IssueStatus{Suspended: true}
+	}
+
 	key := addr.String()
 
 	s.mu.Lock()
@@ -361,6 +389,10 @@ func (s *Service) GetStatus(addr netip.Addr) (IssueStatus, error) {
 // independent context. On success it deletes the issue record (the cert is on
 // disk). On failure it stores a failRecord for the cooldown period.
 func (s *Service) backgroundIssue(addr netip.Addr, key string) {
+	if s.Suspended() {
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), issuanceTimeout)
 	defer cancel()
 

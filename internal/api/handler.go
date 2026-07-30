@@ -30,6 +30,9 @@ var indexHTML []byte
 //go:embed static/404.html
 var notFoundHTML []byte
 
+//go:embed static/notice.html
+var noticeHTML []byte
+
 //go:embed static/docs.html
 var docsHTML []byte
 
@@ -71,12 +74,14 @@ func serveAssets(w http.ResponseWriter, r *http.Request) {
 var statusTemplate = template.Must(template.New("status").Parse(statusHTML))
 var indexTemplate = template.Must(template.New("index").Parse(string(indexHTML)))
 var notFoundTemplate = template.Must(template.New("not-found").Parse(string(notFoundHTML)))
+var noticeTemplate = template.Must(template.New("notice").Parse(string(noticeHTML)))
 var docsTemplate = template.Must(template.New("docs").Parse(string(docsHTML)))
 var docsAPITemplate = template.Must(template.New("docs-api").Parse(string(docsAPIHTML)))
 var docsWebServersTemplate = template.Must(template.New("docs-web-servers").Parse(string(docsWebServersHTML)))
 
 type indexData struct {
 	Analytics bool
+	Suspended bool
 }
 
 // BuildInfo identifies the binary serving the status page.
@@ -149,11 +154,12 @@ func (h *Handler) registerRoutes() {
 	h.mux.HandleFunc("GET /certs/{ip}/privkey.pem", h.handleGetPrivKey)
 	h.mux.HandleFunc("GET /status", h.handleStatus)
 	h.mux.HandleFunc("GET /health", h.handleHealth)
-	h.mux.HandleFunc("GET /docs", handleDocs)
-	h.mux.HandleFunc("GET /docs/api", handleDocsAPI)
-	h.mux.HandleFunc("GET /docs/web-servers", handleDocsWebServers)
+	h.mux.HandleFunc("GET /notice", handleNotice)
+	h.mux.HandleFunc("GET /docs", h.handleDocs)
+	h.mux.HandleFunc("GET /docs/api", h.handleDocsAPI)
+	h.mux.HandleFunc("GET /docs/web-servers", h.handleDocsWebServers)
 	h.mux.HandleFunc("GET /openapi.yaml", handleOpenAPI)
-	h.mux.HandleFunc("GET /{$}", handleIndex)
+	h.mux.HandleFunc("GET /{$}", h.handleIndex)
 	h.mux.HandleFunc("GET /assets/", serveAssets)
 	h.mux.HandleFunc("GET /", handleNotFound)
 }
@@ -390,6 +396,7 @@ func writeCertificateJSON(w http.ResponseWriter, r *http.Request, addr netip.Add
 type statusPageData struct {
 	metrics.Snapshot
 	Analytics                 bool
+	Suspended                 bool
 	Version                   string
 	CommitHash                string
 	SuccessPercent            string
@@ -434,6 +441,7 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	data := statusPageData{
 		Snapshot:                  s,
 		Analytics:                 analyticsHost(r.Host),
+		Suspended:                 h.service.Suspended(),
 		Version:                   h.build.Version,
 		CommitHash:                h.build.CommitHash,
 		SuccessPercent:            "Not available",
@@ -560,12 +568,20 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleIndex serves the static homepage.
-func handleIndex(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Vary", "Host")
-	data := indexData{Analytics: analyticsHost(r.Host)}
+	data := indexData{Analytics: analyticsHost(r.Host), Suspended: h.service.Suspended()}
 	if err := indexTemplate.Execute(w, data); err != nil {
 		slog.Error("index page: render failed", "error", err)
+	}
+}
+
+// handleNotice serves the temporary certificate-operations notice.
+func handleNotice(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := noticeTemplate.Execute(w, pageData{Analytics: analyticsHost(r.Host)}); err != nil {
+		slog.Error("notice page: render failed", "error", err)
 	}
 }
 
@@ -579,8 +595,19 @@ func analyticsHost(hostport string) bool {
 	return host == "lancert.dev"
 }
 
+func (h *Handler) redirectSuspendedDocs(w http.ResponseWriter, r *http.Request) bool {
+	if !h.service.Suspended() {
+		return false
+	}
+	http.Redirect(w, r, "/notice", http.StatusTemporaryRedirect)
+	return true
+}
+
 // handleDocs serves the documentation landing page.
-func handleDocs(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleDocs(w http.ResponseWriter, r *http.Request) {
+	if h.redirectSuspendedDocs(w, r) {
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := docsTemplate.Execute(w, pageData{Analytics: analyticsHost(r.Host)}); err != nil {
 		slog.Error("docs page: render failed", "error", err)
@@ -588,7 +615,10 @@ func handleDocs(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDocsAPI serves the Scalar API reference page.
-func handleDocsAPI(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleDocsAPI(w http.ResponseWriter, r *http.Request) {
+	if h.redirectSuspendedDocs(w, r) {
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := docsAPITemplate.Execute(w, pageData{Analytics: analyticsHost(r.Host)}); err != nil {
 		slog.Error("api docs page: render failed", "error", err)
@@ -596,7 +626,10 @@ func handleDocsAPI(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDocsWebServers serves the web server integration guide page.
-func handleDocsWebServers(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleDocsWebServers(w http.ResponseWriter, r *http.Request) {
+	if h.redirectSuspendedDocs(w, r) {
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := docsWebServersTemplate.Execute(w, pageData{Analytics: analyticsHost(r.Host)}); err != nil {
 		slog.Error("web server docs page: render failed", "error", err)

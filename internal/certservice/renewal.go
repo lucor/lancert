@@ -28,6 +28,10 @@ const (
 
 // StartRenewalWorker starts the single sequential ARI lifecycle worker.
 func (s *Service) StartRenewalWorker(ctx context.Context) {
+	if s.Suspended() {
+		slog.Info("certificate issuance and renewal are suspended")
+		return
+	}
 	go s.renewalLoop(ctx)
 }
 
@@ -50,6 +54,10 @@ func (s *Service) renewalLoop(ctx context.Context) {
 
 // reconcileRenewals processes ready certificates sequentially.
 func (s *Service) reconcileRenewals(ctx context.Context) {
+	if s.Suspended() {
+		return
+	}
+
 	entries, err := s.store.Inventory()
 	if err != nil {
 		slog.Error("certservice: renewal inventory failed", "error", err)
@@ -70,6 +78,10 @@ func (s *Service) reconcileRenewals(ctx context.Context) {
 
 // reconcileCertificate refreshes ARI state and renews addr when scheduled.
 func (s *Service) reconcileCertificate(ctx context.Context, addr netip.Addr) error {
+	if s.Suspended() {
+		return ErrSuspended
+	}
+
 	bundle, err := s.store.Load(addr)
 	if err != nil || bundle == nil {
 		return err
@@ -87,7 +99,7 @@ func (s *Service) reconcileCertificate(ctx context.Context, addr netip.Addr) err
 	now := time.Now().UTC()
 	state := bundle.Renewal
 	if state.NextCheck.IsZero() || !now.Before(state.NextCheck) {
-		info, infoErr := acmeissue.GetRenewalInfo(ctx, leaf, s.config.Environment, s.config.CACertPath)
+		info, infoErr := s.getRenewalInfo(ctx, leaf, s.config.Environment, s.config.CACertPath)
 		if infoErr != nil || !validWindow(info.WindowStart, info.WindowEnd) {
 			state.WindowStart = time.Time{}
 			state.WindowEnd = time.Time{}
@@ -119,13 +131,17 @@ func (s *Service) reconcileCertificate(ctx context.Context, addr netip.Addr) err
 // renewCertificate replaces the current certificate and persists retry state on
 // failure without making the still-valid predecessor unavailable.
 func (s *Service) renewCertificate(ctx context.Context, addr netip.Addr, current *certstore.CertBundle, leaf *x509.Certificate, ariDriven bool) error {
+	if s.Suspended() {
+		return ErrSuspended
+	}
+
 	key := addr.String()
 	slog.Info("certservice: renewal started", "addr", addr, "certificate_id", current.Renewal.CertificateID)
 	_, err, _ := s.sfGroup.Do(key, func() (any, error) {
 		ctx, cancel := context.WithTimeout(ctx, issuanceTimeout)
 		defer cancel()
 		domains := privateip.Domains(addr, s.config.Zone)
-		result, err := acmeissue.Issue(ctx, acmeissue.Request{Domains: domains[:], Email: s.config.Email, AccountKey: s.config.AccountKey, Environment: s.config.Environment, CACertPath: s.config.CACertPath, Resolver: s.config.Resolver, TXTStore: s.txtStore, Replaces: leaf})
+		result, err := s.issueCertificate(ctx, acmeissue.Request{Domains: domains[:], Email: s.config.Email, AccountKey: s.config.AccountKey, Environment: s.config.Environment, CACertPath: s.config.CACertPath, Resolver: s.config.Resolver, TXTStore: s.txtStore, Replaces: leaf})
 		if err != nil {
 			current.Renewal.NextAttempt = retryAt(err, time.Now().UTC())
 			saveErr := s.store.SaveBundle(addr, current)

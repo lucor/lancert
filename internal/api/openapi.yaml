@@ -88,6 +88,19 @@ components:
           type: string
           description: Human-readable error message.
 
+    SuspensionError:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          enum:
+            - certificate_issuance_suspended
+            - certificate_download_suspended
+        message:
+          type: string
+          description: Human-readable temporary suspension notice.
+
   responses:
     BadRequest:
       description: Invalid IP address (not a valid RFC 1918 address).
@@ -156,6 +169,17 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
+    CertificateOperationsSuspended:
+      description: Certificate operations are temporarily suspended.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            examples: [86400]
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SuspensionError"
 
 paths:
   /certs/{ip}:
@@ -199,7 +223,7 @@ paths:
         "500":
           $ref: "#/components/responses/ServerError"
         "503":
-          $ref: "#/components/responses/ServerError"
+          $ref: "#/components/responses/CertificateOperationsSuspended"
 
     get:
       summary: Get certificate status
@@ -227,7 +251,7 @@ paths:
         "502":
           $ref: "#/components/responses/AuthorizationFailed"
         "503":
-          $ref: "#/components/responses/ServerError"
+          $ref: "#/components/responses/CertificateOperationsSuspended"
         "504":
           $ref: "#/components/responses/PropagationTimeout"
 
@@ -286,6 +310,8 @@ paths:
           $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/ServerError"
+        "503":
+          $ref: "#/components/responses/CertificateOperationsSuspended"
 
   /certs/{ip}/privkey.pem:
     parameters:
@@ -320,6 +346,8 @@ paths:
           $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/ServerError"
+        "503":
+          $ref: "#/components/responses/CertificateOperationsSuspended"
 
   /health:
     get:

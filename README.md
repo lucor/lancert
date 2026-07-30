@@ -71,6 +71,11 @@ mise run build
 | `-email` | | Email for Let's Encrypt account |
 | `-acme-env` | `production` | ACME authority: `production`, `staging`, or `local` (Pebble) |
 | `-pregen` | `false` | Pre-generate certificates for common IPs at startup |
+| `-suspended` | `false` | Suspend certificate issuance, renewal, and downloads |
+
+Set `LANCERT_SUSPENDED=true` to enable the temporary suspension without
+changing command-line arguments. DNS, the website, status, and health endpoints
+remain available.
 
 ### Static TXT records
 
