@@ -206,14 +206,15 @@
           <span>{{if eq .Version "dev"}}{{.Version}}{{else}}<a href="https://github.com/lucor/lancert/releases/tag/{{.Version}}" target="_blank" rel="noopener">{{.Version}}</a>{{end}} ({{.CommitHash}})</span>
         </div>
         {{if .Suspended}}
-          <div class="status-summary"><span class="state limited">Certificate operations suspended</span><p class="updated">Since 29 July 2026</p></div>
-          <p class="notice">Certificate issuance, renewal, and downloads are temporarily suspended while Lancert reviews its certificate distribution model. <a href="/notice">Read the notice</a>.</p>
+          <div class="status-summary"><span class="state limited">Certificate service discontinued</span><p class="updated">Certificates revoked 30 July 2026</p></div>
+          <p class="notice">Certificate issuance, renewal, and downloads have stopped. All unexpired certificates previously issued by Lancert have been revoked. <a href="/notice">Read the notice</a>.</p>
           <div class="operations" aria-label="Service component status">
             <div class="operation">DNS <span>Operational</span></div>
             <div class="operation">Website <span>Operational</span></div>
-            <div class="operation suspended">Certificate issuance <span>Suspended</span></div>
-            <div class="operation suspended">Certificate downloads <span>Suspended</span></div>
-            <div class="operation suspended">Certificate renewal <span>Suspended</span></div>
+            <div class="operation suspended">Certificate issuance <span>Stopped</span></div>
+            <div class="operation suspended">Certificate downloads <span>Stopped</span></div>
+            <div class="operation suspended">Certificate renewal <span>Stopped</span></div>
+            <div class="operation suspended">Previously issued certificates <span>Revoked</span></div>
           </div>
         {{else if .Unavailable}}
           <div class="status-summary"><span class="state unavailable">Status data unavailable</span></div>
@@ -297,7 +298,7 @@
           <article class="card">
             <div class="card-label">{{if .Suspended}}Certificates stored{{else}}Certificates available{{end}}</div>
             <div class="value">{{.CertificatesCached}}</div>
-            <p class="context">{{if .Suspended}}Historical inventory; downloads are suspended{{else}}Ready without a new Let’s Encrypt request{{end}}</p>
+            <p class="context">{{if .Suspended}}Historical inventory; certificates have been revoked and downloads are unavailable{{else}}Ready without a new Let’s Encrypt request{{end}}</p>
           </article>
           <article class="card">
             <div class="card-label">Initial certificates issued</div>

@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Temporary suspension notice for Lancert certificate operations.">
-  <title>Certificate issuance temporarily suspended — lancert</title>
+  <meta name="description" content="Notice about the discontinuation of Lancert certificate operations.">
+  <title>Certificate service discontinued — lancert</title>
   <link rel="icon" href="/assets/favicon.ico" sizes="48x48">
   <link rel="icon" href="/assets/favicon.svg" sizes="any" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
@@ -59,17 +59,18 @@
     </nav>
     <main>
       <p class="eyebrow">Service notice</p>
-      <h1>Certificate issuance temporarily suspended</h1>
+      <h1>Certificate service discontinued</h1>
       <div class="notice">
         <p>Lancert is an experimental service for obtaining publicly trusted TLS certificates for services running on private networks.</p>
-        <p>We identified a potential compliance issue involving the way private keys are distributed by the current service. As a precaution, certificate issuance, renewal, and downloads have been temporarily suspended while we seek clarification from Let’s Encrypt.</p>
+        <p>Let’s Encrypt confirmed that the service’s certificate and private-key distribution model conflicts with its Subscriber Agreement and the CA/Browser Forum Baseline Requirements. Certificate issuance, renewal, and downloads have therefore been discontinued.</p>
+        <p><strong>All unexpired certificates previously issued by Lancert were revoked on 30 July 2026.</strong></p>
         <p><strong>Existing DNS records remain operational.</strong></p>
-        <p>Existing certificates and keys should not be used for new deployments while the review is ongoing. We will publish an update if further action is required.</p>
+        <p>If you are still using a Lancert-issued certificate, replace it with a certificate and private key obtained independently. Do not use Lancert-issued certificates or private keys for new deployments.</p>
       </div>
       <p class="operational"><strong>Still available:</strong> the Lancert website, service status, authoritative DNS, and existing DNS records.</p>
     </main>
     <footer>
-      <p>Certificate operations have been suspended since 29 July 2026.</p>
+      <p>Certificate operations stopped on 29 July 2026. Outstanding certificates were revoked on 30 July 2026.</p>
     </footer>
   </div>
 </body>

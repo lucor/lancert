@@ -170,7 +170,7 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
     CertificateOperationsSuspended:
-      description: Certificate operations are temporarily suspended.
+      description: Certificate operations have been discontinued for the current service.
       headers:
         Retry-After:
           schema:

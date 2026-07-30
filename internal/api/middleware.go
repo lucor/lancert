@@ -59,8 +59,8 @@ const (
 	suspensionRetryAfter     = "86400"
 	issuanceSuspendedCode    = "certificate_issuance_suspended"
 	downloadSuspendedCode    = "certificate_download_suspended"
-	issuanceSuspendedMessage = "Certificate issuance is temporarily suspended while Lancert reviews its certificate distribution model."
-	downloadSuspendedMessage = "Certificate downloads are temporarily suspended while Lancert reviews its certificate distribution model."
+	issuanceSuspendedMessage = "Certificate issuance has been discontinued for the current Lancert service."
+	downloadSuspendedMessage = "Certificate downloads are unavailable. All unexpired certificates previously issued by Lancert were revoked on 30 July 2026."
 )
 
 // CertificateSuspension blocks certificate issuance and material distribution

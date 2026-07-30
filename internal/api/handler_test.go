@@ -166,14 +166,15 @@ func TestDocsPages(t *testing.T) {
 func TestSuspendedCertificateEndpoints(t *testing.T) {
 	h := newSuspendedTestHandler(t)
 	tests := []struct {
-		method string
-		path   string
-		code   string
+		method  string
+		path    string
+		code    string
+		message string
 	}{
-		{method: http.MethodPost, path: "/certs/192.168.1.50", code: issuanceSuspendedCode},
-		{method: http.MethodGet, path: "/certs/192.168.1.50", code: downloadSuspendedCode},
-		{method: http.MethodGet, path: "/certs/192.168.1.50/fullchain.pem", code: downloadSuspendedCode},
-		{method: http.MethodGet, path: "/certs/192.168.1.50/privkey.pem", code: downloadSuspendedCode},
+		{method: http.MethodPost, path: "/certs/192.168.1.50", code: issuanceSuspendedCode, message: "discontinued"},
+		{method: http.MethodGet, path: "/certs/192.168.1.50", code: downloadSuspendedCode, message: "revoked on 30 July 2026"},
+		{method: http.MethodGet, path: "/certs/192.168.1.50/fullchain.pem", code: downloadSuspendedCode, message: "revoked on 30 July 2026"},
+		{method: http.MethodGet, path: "/certs/192.168.1.50/privkey.pem", code: downloadSuspendedCode, message: "revoked on 30 July 2026"},
 	}
 
 	for _, tt := range tests {
@@ -186,7 +187,7 @@ func TestSuspendedCertificateEndpoints(t *testing.T) {
 			var body map[string]string
 			require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
 			require.Equal(t, tt.code, body["error"])
-			require.Contains(t, body["message"], "temporarily suspended")
+			require.Contains(t, body["message"], tt.message)
 		})
 	}
 }
@@ -198,9 +199,9 @@ func TestSuspendedPublicPagesAndDocs(t *testing.T) {
 		path     string
 		contains []string
 	}{
-		{path: "/", contains: []string{"Certificate issuance temporarily suspended", "/notice"}},
-		{path: "/notice", contains: []string{"Certificate issuance temporarily suspended", "Existing DNS records remain operational"}},
-		{path: "/status", contains: []string{"Certificate operations suspended", "DNS", "Operational", "Certificate renewal", "Suspended", "/notice"}},
+		{path: "/", contains: []string{"Certificate service discontinued", "revoked on 30 July 2026", "/notice"}},
+		{path: "/notice", contains: []string{"Certificate service discontinued", "All unexpired certificates", "revoked on 30 July 2026", "Existing DNS records remain operational"}},
+		{path: "/status", contains: []string{"Certificate service discontinued", "Previously issued certificates", "Revoked", "DNS", "Operational", "/notice"}},
 		{path: "/health", contains: []string{`"status":"ok"`}},
 	} {
 		t.Run(tt.path, func(t *testing.T) {
