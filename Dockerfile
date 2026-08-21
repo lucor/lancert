@@ -17,10 +17,13 @@ RUN CGO_ENABLED=0 go build -trimpath \
     -ldflags="-w -s" \
     -o healthcheck ./cmd/healthcheck/
 
+RUN mkdir /data && chown 65532:65532 /data
+
 FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=builder /build/lancert /usr/local/bin/lancert
 COPY --from=builder /build/healthcheck /usr/local/bin/healthcheck
+COPY --from=builder --chown=nonroot:nonroot /data /data
 
 VOLUME /data
 EXPOSE 53/udp 53/tcp 8443

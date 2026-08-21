@@ -1,374 +1,233 @@
 openapi: 3.1.0
 info:
-  title: lancert API
+  title: Lancert API
+  version: 2.0.0
   description: |
-    Real Let's Encrypt wildcard TLS certificates for private RFC 1918 IPs,
-    designed for local development.
-
-    Certificates cover both `{ip}.lancert.dev` and `*.{ip}.lancert.dev`
-    (with dots replaced by dashes, e.g. `192-168-1-50.lancert.dev`).
-  version: 1.0.0
-  license:
-    name: MIT
-    url: https://github.com/lucor/lancert/blob/main/LICENSE
-
+    Register an RFC 1918 IPv4 hostname and update its DNS-01 TXT record.
+    Lancert never issues, stores, or distributes certificates or private keys.
+    Only POST /update is compatible with the acme-dns wire contract.
+    Every response includes X-Lancert-API-Version. Version 2 is the current
+    compatibility contract and is independent from the server release version.
 servers:
   - url: https://lancert.dev
-
+paths:
+  /register/{ip}:
+    post:
+      summary: Register a private IPv4 hostname
+      description: Accepts an empty body and returns unrecoverable credentials once.
+      parameters:
+        - name: ip
+          in: path
+          required: true
+          schema:
+            type: string
+          example: 192.168.1.50
+      responses:
+        "201":
+          description: Registration created.
+          headers:
+            X-Lancert-API-Version:
+              $ref: "#/components/headers/APIVersion"
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Registration"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/DatabaseError"
+  /update:
+    post:
+      summary: Update a DNS-01 challenge
+      description: Compatible with the acme-dns update request and success response.
+      parameters:
+        - name: X-Api-User
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: X-Api-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            writeOnly: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Update"
+      responses:
+        "200":
+          description: Challenge usage recorded and the TXT value published in memory for 15 minutes.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [txt]
+                properties:
+                  txt:
+                    $ref: "#/components/schemas/Challenge"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Invalid credentials, disabled registration, or wrong subdomain.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/DatabaseError"
+  /health:
+    get:
+      summary: Essential-state readiness
+      responses:
+        "200":
+          description: Ready.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        "503":
+          description: Essential state is degraded or shutdown has started.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /status:
+    get:
+      summary: Aggregate service and DNS status
+      responses:
+        "200":
+          description: Status response. Metrics availability does not determine DNS readiness.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
 components:
-  parameters:
-    ip:
-      name: ip
-      in: path
-      required: true
-      description: RFC 1918 private IPv4 address (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16).
+  headers:
+    APIVersion:
+      description: Lancert HTTP API compatibility version.
       schema:
         type: string
-        examples:
-          - "192.168.1.50"
-      example: "192.168.1.50"
-
+        const: "2"
   schemas:
-    Certificate:
+    Challenge:
+      type: string
+      minLength: 43
+      maxLength: 43
+      pattern: "^[A-Za-z0-9_-]{43}$"
+    Registration:
       type: object
-      required: [ip, domains, not_after, privkey_pem, fullchain_pem]
+      required: [hostname, username, password, subdomain, fulldomain]
       properties:
-        ip:
+        hostname:
           type: string
-          description: The IP address the certificate was issued for.
-          examples: ["192.168.1.50"]
-        domains:
-          type: array
-          items:
-            type: string
-          description: DNS names covered by the certificate.
-          examples:
-            - ["192-168-1-50.lancert.dev", "*.192-168-1-50.lancert.dev"]
-        not_after:
+          pattern: "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.lancert\\.dev$"
+          example: quiet-otter.lancert.dev
+        username:
           type: string
-          format: date-time
-          description: Certificate expiry time (RFC 3339).
-        privkey_pem:
+          format: uuid
+        password:
           type: string
-          description: PEM-encoded private key.
-        fullchain_pem:
+          description: One-time credential. Save it from the registration response because Lancert cannot return it again.
+        subdomain:
           type: string
-          description: PEM-encoded certificate chain (leaf + intermediates).
-
-    Pending:
+          description: Opaque DNS label assigned by Lancert.
+          pattern: "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+          example: quiet-otter
+        fulldomain:
+          type: string
+          example: _acme-challenge.quiet-otter.lancert.dev
+    Update:
       type: object
-      required: [status, retry_after]
+      additionalProperties: false
+      required: [subdomain, txt]
       properties:
-        status:
+        subdomain:
           type: string
-          const: pending
-        retry_after:
-          type: integer
-          description: Suggested wait time in seconds before polling again.
-          examples: [10]
-
-    TTL:
-      type: integer
-      description: Remaining certificate validity in seconds.
-      examples: [7776000]
-
-    Health:
-      type: object
-      required: [status]
-      properties:
-        status:
-          type: string
-          const: ok
-
+          description: Opaque DNS label returned by registration.
+          pattern: "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+        txt:
+          $ref: "#/components/schemas/Challenge"
     Error:
       type: object
       required: [error]
       properties:
         error:
           type: string
-          description: Human-readable error message.
-
-    SuspensionError:
+    Health:
       type: object
-      required: [error, message]
+      required: [status]
       properties:
-        error:
+        status:
           type: string
-          enum:
-            - certificate_issuance_suspended
-            - certificate_download_suspended
-        message:
+          enum: [ok, degraded]
+    Status:
+      type: object
+      required: [status, version, commit, api_version, metrics]
+      properties:
+        status:
           type: string
-          description: Human-readable temporary suspension notice.
-
+          enum: [operational, degraded]
+        version:
+          type: string
+        commit:
+          type: string
+        api_version:
+          type: string
+          const: "2"
+        metrics:
+          type: object
+          required: [available, queries_24h, acme_active_registrations_30d, response_p95_ms]
+          properties:
+            available:
+              type: boolean
+            queries_24h:
+              type: integer
+              minimum: 0
+              description: Authoritative DNS requests received in the last 24 hours.
+            acme_active_registrations_30d:
+              type: integer
+              minimum: 0
+              description: Registrations with an accepted DNS-01 update in the last 30 days.
+            response_p95_ms:
+              type: number
+              minimum: 0
+            updated_at:
+              type: string
+              format: date-time
   responses:
     BadRequest:
-      description: Invalid IP address (not a valid RFC 1918 address).
+      description: Invalid address, body, JSON, or challenge value.
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
-    NotFound:
-      description: No certificate found for this IP.
+    RateLimited:
+      description: Request rate limit exceeded.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            minimum: 1
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
-    ServerError:
-      description: "Internal server error. Retry-After: 3600 header is included."
-      headers:
-        Retry-After:
-          schema:
-            type: integer
-            examples: [3600]
+    DatabaseError:
+      description: Essential state operation failed.
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
-    AuthorizationFailed:
-      description: ACME authorization failed (Let's Encrypt rejected the DNS-01 challenge).
-      headers:
-        Retry-After:
-          schema:
-            type: integer
-            examples: [3600]
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
-    PropagationTimeout:
-      description: DNS propagation timeout (TXT record not visible within the expected window).
-      headers:
-        Retry-After:
-          schema:
-            type: integer
-            examples: [3600]
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
-    Pending:
-      description: Certificate issuance is in progress. Poll again after the indicated delay.
-      headers:
-        Retry-After:
-          schema:
-            type: integer
-            examples: [10]
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Pending"
-    CertificateReadRateLimited:
-      description: Certificate read rate limit exceeded. Retry after 10 seconds.
-      headers:
-        Retry-After:
-          schema:
-            type: integer
-            examples: [10]
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
-    CertificateOperationsSuspended:
-      description: Certificate operations have been discontinued for the current service.
-      headers:
-        Retry-After:
-          schema:
-            type: integer
-            examples: [86400]
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/SuspensionError"
-
-paths:
-  /certs/{ip}:
-    parameters:
-      - $ref: "#/components/parameters/ip"
-
-    post:
-      summary: Issue a certificate
-      description: |
-        Triggers certificate issuance for the given IP. Returns immediately
-        with 200 if a usable certificate is already cached, or 202 to indicate
-        issuance is in progress. All POST requests are rate limited to 1 req/s
-        with a burst of 3 per source IP. A cache miss that starts new issuance
-        additionally consumes a per-client allowance with a burst of 10 and a
-        refill of one certificate every 24 hours. Cache hits, requests for an
-        issuance already in progress, failures still in cooldown, and
-        background renewals do not consume that allowance. IPv6 clients are
-        grouped by /64.
-      responses:
-        "200":
-          description: Usable certificate already exists.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Certificate"
-        "202":
-          $ref: "#/components/responses/Pending"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "429":
-          description: Request or initial certificate issuance rate limit exceeded.
-          headers:
-            Retry-After:
-              schema:
-                type: integer
-                examples: [1, 86400]
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "500":
-          $ref: "#/components/responses/ServerError"
-        "503":
-          $ref: "#/components/responses/CertificateOperationsSuspended"
-
-    get:
-      summary: Get certificate status
-      description: |
-        Returns the certificate for the given IP if available, or the current
-        issuance status (pending / failed / not found). Rate limited to one
-        request every 10 seconds with a burst of 3 per source IP.
-      responses:
-        "200":
-          description: Certificate is available.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Certificate"
-        "202":
-          $ref: "#/components/responses/Pending"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "429":
-          $ref: "#/components/responses/CertificateReadRateLimited"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "500":
-          $ref: "#/components/responses/ServerError"
-        "502":
-          $ref: "#/components/responses/AuthorizationFailed"
-        "503":
-          $ref: "#/components/responses/CertificateOperationsSuspended"
-        "504":
-          $ref: "#/components/responses/PropagationTimeout"
-
-  /certs/{ip}/ttl:
-    parameters:
-      - $ref: "#/components/parameters/ip"
-
-    get:
-      summary: Get certificate TTL
-      description: |
-        Returns the remaining validity period of the certificate. Rate limited
-        to one request every 10 seconds with a shared burst of 3 per source IP.
-      responses:
-        "200":
-          description: Remaining TTL in seconds as plain text.
-          content:
-            text/plain:
-              schema:
-                $ref: "#/components/schemas/TTL"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "429":
-          $ref: "#/components/responses/CertificateReadRateLimited"
-        "404":
-          $ref: "#/components/responses/NotFound"
-
-  /certs/{ip}/fullchain.pem:
-    parameters:
-      - $ref: "#/components/parameters/ip"
-
-    get:
-      summary: Download certificate chain
-      description: |
-        Returns the PEM-encoded certificate chain as a file download.
-        The filename includes the IP for disambiguation. Rate limited to one
-        request every 10 seconds with a shared burst of 3 per source IP.
-      responses:
-        "200":
-          description: PEM certificate chain.
-          headers:
-            Content-Disposition:
-              schema:
-                type: string
-                examples: ['attachment; filename="fullchain-192.168.1.50.pem"']
-          content:
-            application/pem-certificate-chain:
-              schema:
-                type: string
-        "202":
-          $ref: "#/components/responses/Pending"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "429":
-          $ref: "#/components/responses/CertificateReadRateLimited"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "500":
-          $ref: "#/components/responses/ServerError"
-        "503":
-          $ref: "#/components/responses/CertificateOperationsSuspended"
-
-  /certs/{ip}/privkey.pem:
-    parameters:
-      - $ref: "#/components/parameters/ip"
-
-    get:
-      summary: Download private key
-      description: |
-        Returns the PEM-encoded private key as a file download.
-        The filename includes the IP for disambiguation. Rate limited to one
-        request every 10 seconds with a shared burst of 3 per source IP.
-      responses:
-        "200":
-          description: PEM private key.
-          headers:
-            Content-Disposition:
-              schema:
-                type: string
-                examples: ['attachment; filename="privkey-192.168.1.50.pem"']
-          content:
-            application/octet-stream:
-              schema:
-                type: string
-                format: binary
-        "202":
-          $ref: "#/components/responses/Pending"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "429":
-          $ref: "#/components/responses/CertificateReadRateLimited"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "500":
-          $ref: "#/components/responses/ServerError"
-        "503":
-          $ref: "#/components/responses/CertificateOperationsSuspended"
-
-  /health:
-    get:
-      summary: Health check
-      description: Simple liveness probe.
-      responses:
-        "200":
-          description: Service is healthy.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Health"
-
-  /status:
-    get:
-      summary: Public DNS and certificate readiness status
-      description: Returns a cacheable HTML status page with aggregate DNS activity and current certificate readiness.
-      responses:
-        "200":
-          description: Public status page.
-          content:
-            text/html:
-              schema:
-                type: string

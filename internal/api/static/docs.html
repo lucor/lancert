@@ -1,26 +1,4 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>lancert — Documentation</title>
-  <meta name="description" content="lancert documentation — web server integration guides and API reference for local HTTPS certificates on private IP addresses.">
-  <meta property="og:title" content="lancert — Documentation">
-  <meta property="og:description" content="Web server integration guides and API reference for local HTTPS certificates on private IP addresses.">
-  <meta property="og:image" content="/assets/og-image-1200x630.png">
-  <meta property="og:image:width" content="1200">
-  <meta property="og:image:height" content="630">
-  <meta property="og:type" content="website">
-  <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="lancert — Documentation">
-  <meta name="twitter:description" content="Web server integration guides and API reference for local HTTPS certificates on private IP addresses.">
-  <meta name="twitter:image" content="/assets/og-image-1200x630.png">
-  <meta name="theme-color" content="#FFFFFF">
-  <link rel="icon" href="/assets/favicon.ico" sizes="48x48">
-  <link rel="icon" href="/assets/favicon.svg" sizes="any" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
-  {{if .Analytics}}<script defer src="https://analytics.lucor.dev/script.js" data-website-id="1c9b0509-2f00-493b-bb0a-da02ffb6ff1d"></script>{{end}}
-<style>
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>lancert — Documentation</title><meta name="description" content="Get a trusted certificate for your local app with Lancert."><meta name="theme-color" content="#FFFFFF"><link rel="icon" href="/assets/favicon.ico" sizes="48x48"><link rel="icon" href="/assets/favicon.svg" sizes="any" type="image/svg+xml"><link rel="apple-touch-icon" href="/assets/apple-touch-icon.png"><style>
   :root {
     --lan: #078DE5;
     --lan-soft: #E5F4FE;
@@ -228,15 +206,12 @@
     outline: 2px solid var(--lan);
     outline-offset: 2px;
   }
-</style>
-</head>
-<body>
-
-<nav class="nav">
+</style></head><body><nav class="nav">
   <a href="/" class="logo" aria-label="lancert home"><img src="/assets/lancert-logo.svg" alt="lancert"></a>
   <div class="nav-links">
     <a href="/docs" class="active" aria-current="page">Docs</a>
-    <a href="/docs/web-servers">Web Servers</a>
+    <a href="/docs/cli">CLI</a>
+    <a href="/docs/acme-clients">ACME Clients</a>
     <a href="/docs/api">API Reference</a>
     <a href="/status">Status</a>
     <a class="gh-star" href="https://github.com/lucor/lancert">
@@ -244,42 +219,6 @@
       Star on GitHub
     </a>
   </div>
-</nav>
-
-<main class="container">
-  <header class="page-header">
-    <h1>Documentation</h1>
-    <p class="subtitle">Guides and references for using lancert certificates with your web servers, applications, and local development environment.</p>
-  </header>
-
-  <div class="cards">
-    <a class="card" href="/docs/web-servers">
-      <div class="card-icon server">⚙</div>
-      <h2>Web Server Integration</h2>
-      <p>Configure Caddy, Nginx, or Traefik to serve lancert certificates. Includes a shell renewal script for automated updates.</p>
-      <div class="tags">
-        <span class="tag">Caddy</span>
-        <span class="tag">Nginx</span>
-        <span class="tag">Traefik</span>
-        <span class="tag">Auto-renewal</span>
-      </div>
-    </a>
-
-    <a class="card" href="/docs/api">
-      <div class="card-icon api">⌨</div>
-      <h2>API Reference</h2>
-      <p>Interactive documentation for the lancert API — request certificates, download PEM files, and query certificate TTL.</p>
-      <div class="tags">
-        <span class="tag">OpenAPI</span>
-        <span class="tag">Endpoints</span>
-      </div>
-    </a>
-  </div>
-</main>
-
-<footer class="site-footer">
+</nav><main class="container"><header class="page-header"><h1>Documentation</h1><p class="subtitle">Get a trusted certificate for your local app in seconds. Use the Lancert CLI or your preferred ACME client.</p></header><div class="cards"><a class="card" href="/docs/cli"><div class="card-icon api">⌘</div><h2>Lancert CLI</h2><p>Install the CLI, get a certificate for a private IPv4 address, configure your web server, and renew it when needed.</p><div class="tags"><span class="tag">CLI</span><span class="tag">Let’s Encrypt</span><span class="tag">Renewal</span></div></a><a class="card" href="/docs/acme-clients"><div class="card-icon server">⚙</div><h2>Use your own ACME client</h2><p>Use Lancert’s DNS service with Lego, Certbot, acme.sh, or another compatible client. This path needs a few extra setup steps.</p><div class="tags"><span class="tag">Lego</span><span class="tag">Certbot</span><span class="tag">acme.sh</span></div></a></div></main><footer class="site-footer">
   <p>The <a href="https://github.com/lucor/lancert/blob/main/LICENSE">lancert software is MIT-licensed</a>. The software and DNS service are provided “as is”, without warranty.</p>
-</footer>
-
-</body>
-</html>
+</footer></body></html>

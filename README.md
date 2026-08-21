@@ -1,128 +1,133 @@
 # lancert
 
-<p align="center">
-  <img src="internal/api/static/assets/lancert-logo.svg" alt="lancert" width="320">
-</p>
+Lancert helps you get a trusted HTTPS certificate for an app on your private
+network. It provides a public hostname and handles the DNS challenge required
+by the certificate authority.
 
-Local HTTPS certificates for private IP addresses.
+This is the standard ACME DNS-01 flow. You can set it up with your own domain
+and DNS provider; Lancert provides the DNS service for developers who do not
+have or do not want to configure one.
 
-Get browser-trusted Let’s Encrypt wildcard TLS certificates for private IP addresses on your LAN. Test local apps on real devices without a custom CA or certificate warnings.
+Lancert does **not** store certificates or private keys. Your ACME client keeps
+them on your machine.
 
-lancert maps names such as `*.192-168-1-50.lancert.dev` to `192.168.1.50`, which is useful for service workers, mobile push notifications, and other APIs that require a secure context.
+## Use the Lancert CLI
 
-<p align="center">
-  <img src="demo/demo.gif" alt="lancert demo — download certs and serve HTTPS with Caddy" width="800">
-</p>
+The [Lancert CLI](https://github.com/lucor/lancert-cli) is the quickest path:
 
-## Architecture
-
-Single-process service with three components:
-
-1. **DNS server** — authoritative for the `lancert.dev` zone. Resolves `*.192-168-1-50.lancert.dev` to `192.168.1.50` by parsing the IP from the subdomain. Serves TXT records for ACME challenges from an in-memory store.
-
-2. **HTTP API** — `POST /certs/{ip}` to issue a certificate, `GET /certs/{ip}` to fetch it, `GET /certs/{ip}/fullchain.pem` and `GET /certs/{ip}/privkey.pem` for direct PEM downloads, `GET /certs/{ip}/ttl` for remaining validity.
-
-3. **Certificate service** — ACME DNS-01 flow via Let's Encrypt. Each IP gets one certificate covering both `192-168-1-50.lancert.dev` and `*.192-168-1-50.lancert.dev`. Certificates are renewed automatically using ACME Renewal Information (ARI) when available, with a time-based fallback when ARI cannot be used.
-
-The public `GET /status` page reports aggregate DNS activity, serving stability,
-and current certificate readiness. It observes authoritative DNS queries, not
-users or unique installations. Metrics are buffered in memory and flushed to
-`metrics.db` periodically; metrics failures never stop DNS or certificate
-serving.
-
-## Security
-
-> [!WARNING]
-> lancert does not provide confidentiality. The private keys are served via API to anyone who requests them. There is no ownership concept for private IPs — `192.168.1.50` on your network is the same address as `192.168.1.50` on someone else's. Anyone who knows the IP can download the same certificate and private key.
->
-> The browser will show a valid HTTPS connection, but this does not mean the traffic is protected from other devices on the same network.
->
-> The threat model is simple: you trust your local network enough to develop on it, and you need the browser to trust your certificate. That's it. Do not use these certificates in production.
-
-## Usage
-
-Issue a certificate for your LAN IP:
-
-```bash
-curl -X POST https://lancert.dev/certs/192.168.1.50
+```console
+go install go.lucor.dev/lancert-cli/cmd/lancert@latest
+lancert 192.168.1.50
 ```
 
-Fetch an existing certificate:
+The CLI currently uses Let's Encrypt by default. Let's Encrypt terms, policies,
+and rate limits apply. Run `lancert renew` regularly to renew locally managed
+certificates.
+
+## Use your own ACME client
+
+Lego, Certbot, acme.sh, and other clients that support an acme-dns-compatible
+API also work with Lancert. This path needs a few extra setup steps.
+
+### Register a hostname
+
+Registration accepts no request body and returns credentials only once:
 
 ```bash
-curl https://lancert.dev/certs/192.168.1.50
+curl --fail-with-body -X POST https://lancert.dev/register/192.168.1.50
 ```
 
-## Running
+```json
+{
+  "hostname": "quiet-otter.lancert.dev",
+  "username": "b5f7c153-8f3c-4906-a046-080c005ff8f2",
+  "password": "save-this-one-time-secret",
+  "subdomain": "quiet-otter",
+  "fulldomain": "_acme-challenge.quiet-otter.lancert.dev"
+}
+```
+
+Save the complete response securely. Lancert has no credential lookup,
+recovery, or rotation API.
+
+Hostname labels normally contain two curated words; a short suffix may appear
+after collisions. Treat the returned label as opaque and copy it exactly.
+
+The registration publishes:
+
+```text
+quiet-otter.lancert.dev       A 192.168.1.50
+*.quiet-otter.lancert.dev     A 192.168.1.50
+```
+
+Only RFC 1918 IPv4 targets are accepted. Public, loopback, link-local, CGNAT,
+and IPv6 targets are rejected.
+
+For Lego, Certbot, acme.sh, and other compatible clients, see the
+[ACME client guide](https://lancert.dev/docs/acme-clients). The selected
+certificate authority's terms, policies, and rate limits apply.
+
+## Security model
+
+Each credential can update only the two most recent distinct TXT values at its
+assigned `_acme-challenge` owner. It cannot change A records, static zone data,
+or another registration. Passwords contain 240 random bits and are persisted
+only as domain-separated BLAKE2b-256 digests.
+
+Challenge values are process-local, expire after 15 minutes, and are served
+with a one-second DNS TTL. They are never persisted and disappear on restart.
+
+Possession of a credential can authorize certificate issuance for the assigned
+hostname and its wildcard. Keep the credential private and use the production
+API only through HTTPS. The service intentionally provides no recovery path.
+
+## Run the service
 
 ```bash
 mise run build
-./bin/lancert -server-ip <PUBLIC_IP> [-acme-env staging] [-email you@example.com]
+LANCERT_SERVER_IP=203.0.113.10 \
+LANCERT_IP_HASH_SALT="$(openssl rand -hex 32)" \
+./bin/lancert
 ```
 
-### Flags
-
 | Flag | Default | Description |
-|------|---------|-------------|
-| `-server-ip` | (required) | Public IP of this server |
-| `-dns-addr` | `:53` | DNS listen address |
-| `-http-addr` | `:8443` | HTTP listen address (behind reverse proxy) |
-| `-data-dir` | `data` | Data directory for certs and keys |
-| `-email` | | Email for Let's Encrypt account |
-| `-acme-env` | `production` | ACME authority: `production`, `staging`, or `local` (Pebble) |
-| `-pregen` | `false` | Pre-generate certificates for common IPs at startup |
-| `-suspended` | `false` | Suspend certificate issuance, renewal, and downloads |
+| --- | --- | --- |
+| `-server-ip` | required | Public IPv4 for zone apex and nameserver glue |
+| `-dns-addr` | `:53` | Authoritative UDP/TCP DNS listen address |
+| `-http-addr` | `:8443` | HTTP listen address, normally behind HTTPS ingress |
+| `-data-dir` | `data` | Directory containing `core.db` and `metrics.db` |
 
-Set `LANCERT_SUSPENDED=true` to enable the temporary suspension without
-changing command-line arguments. DNS, the website, status, and health endpoints
-remain available.
+`core.db` is essential and fail-closed. It must be stored on a durable private
+volume and backed up with a SQLite-consistent method. `metrics.db` is
+observational and fail-open. Lancert v2 does not migrate v1 data; deploy it with
+a new data volume.
+
+See [`.env.example`](.env.example) for all environment variables and
+[`internal/api/openapi.yaml`](internal/api/openapi.yaml) for the HTTP contract.
 
 ### Static TXT records
 
-Set `LANCERT_STATIC_TXT` to publish static TXT RRsets for domain-verification
-records. Names are relative to `LANCERT_ZONE`, and `@` identifies the zone apex:
+`LANCERT_STATIC_TXT` publishes declarative verification records. Names are
+relative to `LANCERT_ZONE`; `@` is the apex:
 
 ```env
 LANCERT_STATIC_TXT='{"@":{"ttl":300,"values":["verification-value"]}}'
 ```
 
-Each name can have multiple values. They share one TTL because they belong to
-the same DNS RRset. The `ttl` property is optional and defaults to 300 seconds.
-Names outside `LANCERT_ZONE` and names below `_acme-challenge` are rejected.
-Static records are loaded at startup, so configuration changes require a
-service restart.
+Dynamic challenge owners are reserved. Configuration changes require restart.
 
-### Local development with mise
-
-The repository includes a safe local-development profile pinned to Go 1.26.5.
-The `dev` task uses Air for automatic rebuilds when source files change:
+## Development
 
 ```bash
 mise install
 mise run setup
-mise run dev
-```
-
-The dev task uses `./data` for local data and writes binaries to `./bin`.
-It starts a local Pebble ACME server and Lancert through the `.mise/Procfile`,
-binds DNS to `127.0.0.1:1053`, and uses HTTP on `127.0.0.1:8443`. `mise run
-setup` generates a short-lived local TLS CA and key with mkcert under
-`.mise/pebble/`; these files are ignored by Git.
-No public DNS or Let's Encrypt account is required for local issuance.
-
-Run the local end-to-end ACME and ARI flow separately from the unit suite:
-
-```bash
+mise run test
+mise run race
 mise run e2e
 ```
 
-## Supported IPs
-
-Only RFC 1918 private IPv4 addresses:
-
-- `10.0.0.0/8`
-- `172.16.0.0/12`
-- `192.168.0.0/16`
+The E2E test uses a real Lego client and Pebble. Certificates and private keys
+remain in the test client's temporary directory and never enter Lancert.
 
 ## License
 

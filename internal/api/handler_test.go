@@ -1,19 +1,10 @@
 package api
 
 import (
-	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/x509"
-	"crypto/x509/pkix"
+	"bytes"
 	"encoding/json"
-	"encoding/pem"
-	"math/big"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -21,411 +12,245 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	acmeissue "lucor.dev/lancert/internal/acme"
-	"lucor.dev/lancert/internal/certservice"
-	"lucor.dev/lancert/internal/certstore"
-	"lucor.dev/lancert/internal/dnssrv"
-	"lucor.dev/lancert/internal/metrics"
+	"go.lucor.dev/lancert/internal/metrics"
+	"go.lucor.dev/lancert/internal/registration"
 )
 
-// newTestHandler creates a handler backed by a temp cert store.
-func newTestHandler(t *testing.T) *Handler {
+const testChallenge = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+type testAPI struct {
+	handler  http.Handler
+	store    *registration.Store
+	recorder *testMetricsRecorder
+}
+
+type testMetricsRecorder struct {
+	challengeUpdates []string
+}
+
+func (*testMetricsRecorder) RecordDNSQuery(string) {}
+
+func (r *testMetricsRecorder) RecordChallengeUpdate(registrationID string) {
+	r.challengeUpdates = append(r.challengeUpdates, registrationID)
+}
+
+func (*testMetricsRecorder) RecordResponse(bool, time.Duration) {}
+
+func newTestAPI(t *testing.T) testAPI {
 	t.Helper()
-
-	store := certstore.New(t.TempDir())
-	txtStore := dnssrv.NewTXTStore()
-
-	svc := certservice.New(
-		certservice.Config{Zone: "lancert.dev", Environment: acmeissue.EnvironmentStaging},
-		store,
-		txtStore,
-		metrics.Disabled{},
-	)
-
-	return New(svc, nil)
-}
-
-func newSuspendedTestHandler(t *testing.T) http.Handler {
-	t.Helper()
-
-	store := certstore.New(t.TempDir())
-	svc := certservice.New(
-		certservice.Config{
-			Zone:        "lancert.dev",
-			Environment: acmeissue.EnvironmentStaging,
-			Suspended:   true,
-		},
-		store,
-		dnssrv.NewTXTStore(),
-		metrics.Disabled{},
-	)
-	return Chain(New(svc, nil), CertificateSuspension(svc))
-}
-
-func TestHealth(t *testing.T) {
-	h := newTestHandler(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/health", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusOK, rec.Code)
-
-	var body map[string]string
-	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
-	assert.Equal(t, "ok", body["status"])
-}
-
-func TestStatus(t *testing.T) {
-	store := certstore.New(t.TempDir())
-	svc := certservice.New(certservice.Config{Zone: "lancert.dev", Environment: acmeissue.EnvironmentStaging}, store, dnssrv.NewTXTStore(), metrics.Disabled{})
-	h := New(svc, func() metrics.Snapshot {
-		return metrics.Snapshot{Queries24H: 12, WriteAttempts24H: 10, WriteSuccesses24H: 9, RecentQueries: 2, RecentWindow: time.Minute, ResponseP95: 2 * time.Millisecond, DailyLookups: []metrics.DailyLookup{{Date: "2026-07-20", Queries: 4}, {Date: "2026-07-21", Queries: 12}}, TrackingComplete: true, ActiveTargets30D: 3, ActivePrefixes30D: 2, TopBlocks: []metrics.Breakdown{{Name: "10.0.0.0/8", Queries: 9}, {Name: "192.168.0.0/16", Queries: 3}}, Readiness: metrics.Readiness{Available: true, Total: 3, Ready: 2}, CertificateLifecycle: metrics.CertificateLifecycle{RecordedSince: time.Date(2026, 7, 23, 0, 0, 0, 0, time.UTC), InitialIssuances: 7, Renewals: 3, ARIRenewals: 2, TotalIssued: 10, ARIAdoption: 66.666, HasARIAdoption: true}}
-	})
-	req := httptest.NewRequest(http.MethodGet, "/status", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Body.String(), "DNS target activity")
-	assert.Contains(t, rec.Body.String(), "Certificate availability")
-	assert.Contains(t, rec.Body.String(), "Certificates available")
-	assert.Contains(t, rec.Body.String(), "Initial certificates issued")
-	assert.Contains(t, rec.Body.String(), "DNS lookups by private address block")
-	assert.Contains(t, rec.Body.String(), "<strong>75.0%</strong> · 9 lookups")
-	assert.Contains(t, rec.Body.String(), "width: 75%")
-	assert.Contains(t, rec.Body.String(), "ARI renewal activity")
-	assert.Contains(t, rec.Body.String(), "2 of 3 renewals")
-	assert.Contains(t, rec.Body.String(), "66.7%")
-	assert.NotContains(t, rec.Body.String(), "Recorded since")
-	assert.Contains(t, rec.Body.String(), "Serving certificates since 23 Jul 2026.")
-	assert.Contains(t, rec.Body.String(), "Lookup trend")
-	assert.Contains(t, rec.Body.String(), "21 Jul: 12 lookups")
-	assert.Contains(t, rec.Body.String(), `class="lookup-tooltip"`)
-	assert.Contains(t, rec.Body.String(), `tabindex="0" aria-label="21 Jul: 12 lookups"`)
-	assert.Contains(t, rec.Body.String(), "dev (dev)")
-}
-
-func TestStatusBuildInfo(t *testing.T) {
-	store := certstore.New(t.TempDir())
-	svc := certservice.New(certservice.Config{Zone: "lancert.dev", Environment: acmeissue.EnvironmentStaging}, store, dnssrv.NewTXTStore(), metrics.Disabled{})
-	h := NewWithBuildInfo(svc, nil, BuildInfo{Version: "v2026.07.24", CommitHash: "abcdef"})
-
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/status", nil))
-
-	assert.Contains(t, rec.Body.String(), ">v2026.07.24</a> (abcdef)")
-	assert.Contains(t, rec.Body.String(), "https://github.com/lucor/lancert/releases/tag/v2026.07.24")
-}
-
-func TestStatusWithoutRenewals(t *testing.T) {
-	store := certstore.New(t.TempDir())
-	svc := certservice.New(certservice.Config{Zone: "lancert.dev", Environment: acmeissue.EnvironmentStaging}, store, dnssrv.NewTXTStore(), metrics.Disabled{})
-	h := New(svc, func() metrics.Snapshot {
-		return metrics.Snapshot{Readiness: metrics.Readiness{Available: true}, CertificateLifecycle: metrics.CertificateLifecycle{TotalIssued: 2}}
-	})
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/status", nil))
-
-	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Body.String(), "<strong>—</strong>")
-	assert.Contains(t, rec.Body.String(), "Not available")
-	assert.Contains(t, rec.Body.String(), "No certificate renewals have been recorded yet.")
-	assert.NotContains(t, rec.Body.String(), "aria-label=\"ARI adoption\"")
-}
-
-func TestAssets(t *testing.T) {
-	h := newTestHandler(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/assets/lancert-logo.svg", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, "image/svg+xml", rec.Header().Get("Content-Type"))
-
-	req = httptest.NewRequest(http.MethodGet, "/assets/", nil)
-	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	assert.Equal(t, http.StatusNotFound, rec.Code)
-}
-
-func TestDocsPages(t *testing.T) {
-	h := newTestHandler(t)
-
-	for _, path := range []string{"/docs", "/docs/api", "/docs/web-servers"} {
-		t.Run(path, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, path, nil)
-			rec := httptest.NewRecorder()
-			h.ServeHTTP(rec, req)
-			assert.Equal(t, http.StatusOK, rec.Code)
-			assert.Contains(t, rec.Header().Get("Content-Type"), "text/html")
-			assert.Contains(t, rec.Body.String(), "lancert")
-		})
+	store, err := registration.Open(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	snapshot := func() metrics.Snapshot {
+		return metrics.Snapshot{
+			Queries24H:                 42,
+			ACMEActiveRegistrations30D: 3,
+			ResponseP95:                1500 * time.Microsecond,
+			FreshAt:                    time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC),
+		}
 	}
+	recorder := &testMetricsRecorder{}
+	h := NewWithBuildInfo(store, "lancert.dev.", snapshot, recorder, BuildInfo{Version: "v2", CommitHash: "abcdef"})
+	return testAPI{handler: Chain(h, Recover, SecurityHeaders), store: store, recorder: recorder}
 }
 
-func TestSuspendedCertificateEndpoints(t *testing.T) {
-	h := newSuspendedTestHandler(t)
+func perform(handler http.Handler, method, path string, body []byte, headers map[string]string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(method, path, bytes.NewReader(body))
+	for key, value := range headers {
+		request.Header.Set(key, value)
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	return recorder
+}
+
+func register(t *testing.T, api testAPI) registrationResponse {
+	t.Helper()
+	response := perform(api.handler, http.MethodPost, "/register/192.168.1.50", nil, nil)
+	require.Equal(t, http.StatusCreated, response.Code, response.Body.String())
+	var registered registrationResponse
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &registered))
+	return registered
+}
+
+func TestRegisterContract(t *testing.T) {
+	api := newTestAPI(t)
+	response := perform(api.handler, http.MethodPost, "/register/192.168.1.50", nil, map[string]string{"Accept-Encoding": "gzip"})
+	require.Equal(t, http.StatusCreated, response.Code)
+	assert.Equal(t, "application/json", response.Header().Get("Content-Type"))
+	assert.Equal(t, CompatibilityVersion, response.Header().Get(compatibilityHeader))
+	assert.Equal(t, "no-store", response.Header().Get("Cache-Control"))
+	assert.Empty(t, response.Header().Get("Content-Encoding"))
+
+	var registered registrationResponse
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &registered))
+	assert.Regexp(t, `^[a-z]+-[a-z]+(?:-[a-z2-7]{2})?\.lancert\.dev$`, registered.Hostname)
+	assert.Regexp(t, `^[a-z]+-[a-z]+(?:-[a-z2-7]{2})?$`, registered.Subdomain)
+	assert.Equal(t, "_acme-challenge."+registered.Subdomain+".lancert.dev", registered.FullDomain)
+	assert.NotEmpty(t, registered.Username)
+	assert.Len(t, registered.Password, 40)
+	_, ok := api.store.Lookup(registered.Subdomain)
+	assert.True(t, ok)
+}
+
+func TestRegisterRejectsUnsupportedRoutesAddressesAndBodies(t *testing.T) {
+	api := newTestAPI(t)
 	tests := []struct {
-		method  string
-		path    string
-		code    string
-		message string
+		method string
+		path   string
+		body   []byte
+		status int
 	}{
-		{method: http.MethodPost, path: "/certs/192.168.1.50", code: issuanceSuspendedCode, message: "discontinued"},
-		{method: http.MethodGet, path: "/certs/192.168.1.50", code: downloadSuspendedCode, message: "revoked on 30 July 2026"},
-		{method: http.MethodGet, path: "/certs/192.168.1.50/fullchain.pem", code: downloadSuspendedCode, message: "revoked on 30 July 2026"},
-		{method: http.MethodGet, path: "/certs/192.168.1.50/privkey.pem", code: downloadSuspendedCode, message: "revoked on 30 July 2026"},
+		{http.MethodPost, "/register", nil, http.StatusNotFound},
+		{http.MethodPost, "/register/192.168.1.50/extra", nil, http.StatusNotFound},
+		{http.MethodGet, "/register/192.168.1.50", nil, http.StatusMethodNotAllowed},
+		{http.MethodPost, "/register/8.8.8.8", nil, http.StatusBadRequest},
+		{http.MethodPost, "/register/127.0.0.1", nil, http.StatusBadRequest},
+		{http.MethodPost, "/register/fd00::1", nil, http.StatusBadRequest},
+		{http.MethodPost, "/register/192.168.1.50", []byte("x"), http.StatusBadRequest},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			h.ServeHTTP(rec, httptest.NewRequest(tt.method, tt.path, nil))
-
-			require.Equal(t, http.StatusServiceUnavailable, rec.Code)
-			require.Equal(t, suspensionRetryAfter, rec.Header().Get("Retry-After"))
-			var body map[string]string
-			require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
-			require.Equal(t, tt.code, body["error"])
-			require.Contains(t, body["message"], tt.message)
-		})
+	for _, test := range tests {
+		response := perform(api.handler, test.method, test.path, test.body, nil)
+		assert.Equal(t, test.status, response.Code, "%s %s", test.method, test.path)
 	}
 }
 
-func TestSuspendedPublicPagesAndDocs(t *testing.T) {
-	h := newSuspendedTestHandler(t)
+func TestAcmeDNSUpdateContract(t *testing.T) {
+	api := newTestAPI(t)
+	registered := register(t, api)
+	body, err := json.Marshal(updateRequest{Subdomain: registered.Subdomain, TXT: testChallenge})
+	require.NoError(t, err)
+	response := perform(api.handler, http.MethodPost, "/update", body, map[string]string{
+		"Content-Type": "application/json",
+		"X-Api-User":   registered.Username,
+		"X-Api-Key":    registered.Password,
+	})
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	assert.JSONEq(t, `{"txt":"`+testChallenge+`"}`, response.Body.String())
+	state, ok := api.store.Lookup(registered.Subdomain)
+	require.True(t, ok)
+	assert.Equal(t, testChallenge, state.Challenges[0])
+	assert.Equal(t, []string{state.ID}, api.recorder.challengeUpdates)
+}
 
-	for _, tt := range []struct {
+func TestUpdateAuthorizationAndValidationResponses(t *testing.T) {
+	api := newTestAPI(t)
+	registered := register(t, api)
+	validBody := `{"subdomain":"` + registered.Subdomain + `","txt":"` + testChallenge + `"}`
+	tests := []struct {
+		name    string
+		body    string
+		user    string
+		key     string
+		status  int
+		errorID string
+	}{
+		{"missing headers", validBody, "", "", http.StatusUnauthorized, "forbidden"},
+		{"unknown user", validBody, "unknown", registered.Password, http.StatusUnauthorized, "forbidden"},
+		{"bad key", validBody, registered.Username, "bad", http.StatusUnauthorized, "forbidden"},
+		{"other subdomain", `{"subdomain":"other","txt":"` + testChallenge + `"}`, registered.Username, registered.Password, http.StatusUnauthorized, "forbidden"},
+		{"authenticated bad txt", `{"subdomain":"` + registered.Subdomain + `","txt":"bad"}`, registered.Username, registered.Password, http.StatusBadRequest, "bad_txt"},
+		{"bad auth hides bad txt", `{"subdomain":"` + registered.Subdomain + `","txt":"bad"}`, registered.Username, "bad", http.StatusUnauthorized, "forbidden"},
+		{"unknown field", `{"subdomain":"` + registered.Subdomain + `","txt":"` + testChallenge + `","other":true}`, registered.Username, registered.Password, http.StatusBadRequest, "bad_request"},
+		{"trailing JSON", validBody + `{}`, registered.Username, registered.Password, http.StatusBadRequest, "bad_request"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := perform(api.handler, http.MethodPost, "/update", []byte(test.body), map[string]string{
+				"X-Api-User": test.user,
+				"X-Api-Key":  test.key,
+			})
+			assert.Equal(t, test.status, response.Code)
+			assert.JSONEq(t, `{"error":"`+test.errorID+`"}`, response.Body.String())
+		})
+	}
+	assert.Empty(t, api.recorder.challengeUpdates)
+}
+
+func TestHealthAndStatus(t *testing.T) {
+	api := newTestAPI(t)
+	health := perform(api.handler, http.MethodGet, "/health", nil, nil)
+	assert.Equal(t, http.StatusOK, health.Code)
+	assert.JSONEq(t, `{"status":"ok"}`, health.Body.String())
+
+	status := perform(api.handler, http.MethodGet, "/status", nil, nil)
+	assert.Equal(t, http.StatusOK, status.Code)
+	assert.JSONEq(t, `{
+		"status":"operational",
+		"version":"v2",
+		"commit":"abcdef",
+		"api_version":"2",
+		"metrics":{
+			"available":true,
+			"queries_24h":42,
+			"acme_active_registrations_30d":3,
+			"response_p95_ms":1.5,
+			"updated_at":"2026-07-30T12:00:00Z"
+		}
+	}`, status.Body.String())
+}
+
+func TestPublicPages(t *testing.T) {
+	api := newTestAPI(t)
+	tests := []struct {
 		path     string
 		contains []string
+		headers  map[string]string
 	}{
-		{path: "/", contains: []string{"Certificate service discontinued", "revoked on 30 July 2026", "/notice"}},
-		{path: "/notice", contains: []string{"Certificate service discontinued", "All unexpired certificates", "revoked on 30 July 2026", "Existing DNS records remain operational"}},
-		{path: "/status", contains: []string{"Certificate service discontinued", "Previously issued certificates", "Revoked", "DNS", "Operational", "/notice"}},
-		{path: "/health", contains: []string{`"status":"ok"`}},
-	} {
-		t.Run(tt.path, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tt.path, nil))
-			require.Equal(t, http.StatusOK, rec.Code)
-			for _, want := range tt.contains {
-				require.Contains(t, rec.Body.String(), want)
+		{"/assets/lancert-logo.svg", []string{"<svg"}, nil},
+		{"/", []string{"Local HTTPS for private IP addresses", "lancert </span><span class=\"t-url\">192.168.1.50", "Prefer your own ACME client", "Why use lancert for local HTTPS", "How local HTTPS works", "Example: Caddy", "Let’s Encrypt", "rate limits", "lancert renew", "What do I trust Lancert with?"}, nil},
+		{"/docs", []string{"Documentation", "Lancert CLI", "Use your own ACME client", "CLI", "Let’s Encrypt", "Renewal", "Certbot", "Lego", "acme.sh", "/docs/api"}, nil},
+		{"/docs/cli", []string{"CLI Quickstart", "Install the CLI", "lancert 192.168.1.50", "Let’s Encrypt", "rate limits", "lancert renew", "Prefer another ACME client"}, nil},
+		{"/docs/acme-clients", []string{"Use your own ACME client", "Register the target IP", "one-time-secret", "Certbot", "Lego", "acme.sh", "Caddy", "Nginx", "Traefik", "Renew the certificate"}, nil},
+		{"/docs/api", []string{"api-reference", `data-url="/openapi.yaml"`, "Lancert v2"}, nil},
+		{"/status", []string{"lancert status", "Service activity", "ACME-active registrations", "42", "1.50 ms"}, map[string]string{"Accept": "text/html"}},
+		{"/openapi.yaml", []string{"openapi: 3.1.0", "/register/{ip}", "/update"}, nil},
+	}
+	for _, test := range tests {
+		t.Run(test.path, func(t *testing.T) {
+			response := perform(api.handler, http.MethodGet, test.path, nil, test.headers)
+			assert.Equal(t, http.StatusOK, response.Code)
+			for _, expected := range test.contains {
+				assert.Contains(t, response.Body.String(), expected)
+			}
+			for _, obsolete := range []string{"lancert-registration.json", "clients/", "download PEM", "certificate issuance", "certificate downloads", "Certificate availability", "ARI renewal", "Suspended"} {
+				assert.NotContains(t, response.Body.String(), obsolete)
 			}
 		})
 	}
-
-	for _, path := range []string{"/docs", "/docs/api", "/docs/web-servers"} {
-		t.Run(path, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
-			require.Equal(t, http.StatusTemporaryRedirect, rec.Code)
-			require.Equal(t, "/notice", rec.Header().Get("Location"))
-		})
-	}
+	assert.Equal(t, http.StatusNotFound, perform(api.handler, http.MethodGet, "/docs/web-servers", nil, nil).Code)
 }
 
-func TestSuspendedTTLRemainsAvailable(t *testing.T) {
-	h := newSuspendedTestHandler(t)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/certs/192.168.1.50/ttl", nil))
+func TestReadinessLifecycleIsStickyDuringShutdown(t *testing.T) {
+	api := newTestAPI(t)
+	handler := New(api.store, "lancert.dev.", nil, nil)
 
-	require.Equal(t, http.StatusNotFound, rec.Code)
-	require.NotContains(t, rec.Body.String(), "suspended")
+	handler.PrepareStartup()
+	assert.Equal(t, http.StatusServiceUnavailable, perform(handler, http.MethodGet, "/health", nil, nil).Code)
+	handler.MarkReady()
+	assert.Equal(t, http.StatusOK, perform(handler, http.MethodGet, "/health", nil, nil).Code)
+	handler.BeginShutdown()
+	handler.MarkReady()
+	assert.Equal(t, http.StatusServiceUnavailable, perform(handler, http.MethodGet, "/health", nil, nil).Code)
 }
 
-func TestIndexAnalyticsOnlyOnCanonicalHost(t *testing.T) {
-	h := newTestHandler(t)
-
-	for _, test := range []struct {
-		host      string
-		analytics bool
-	}{
-		{host: "localhost:8080", analytics: false},
-		{host: "192.168.1.50", analytics: false},
-		{host: "preview.lancert.dev", analytics: false},
-		{host: "lancert.dev", analytics: true},
-		{host: "lancert.dev:443", analytics: true},
-	} {
-		t.Run(test.host, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/", nil)
-			req.Host = test.host
-			rec := httptest.NewRecorder()
-			h.ServeHTTP(rec, req)
-
-			containsScript := strings.Contains(rec.Body.String(), "analytics.lucor.dev/script.js")
-			assert.Equal(t, test.analytics, containsScript)
-		})
-	}
+func TestStorageFailureDegradesHealth(t *testing.T) {
+	api := newTestAPI(t)
+	require.NoError(t, api.store.Close())
+	response := perform(api.handler, http.MethodPost, "/register/10.0.0.1", nil, nil)
+	assert.Equal(t, http.StatusInternalServerError, response.Code)
+	assert.JSONEq(t, `{"error":"db_error"}`, response.Body.String())
+	health := perform(api.handler, http.MethodGet, "/health", nil, nil)
+	assert.Equal(t, http.StatusServiceUnavailable, health.Code)
+	assert.JSONEq(t, `{"status":"degraded"}`, health.Body.String())
 }
 
-func TestAnalyticsOnAllHTMLPages(t *testing.T) {
-	h := newTestHandler(t)
-	paths := []string{"/", "/docs", "/docs/api", "/docs/web-servers", "/status", "/missing"}
-
-	for _, host := range []string{"lancert.dev", "preview.lancert.dev"} {
-		for _, path := range paths {
-			t.Run(host+path, func(t *testing.T) {
-				req := httptest.NewRequest(http.MethodGet, path, nil)
-				req.Host = host
-				rec := httptest.NewRecorder()
-				h.ServeHTTP(rec, req)
-
-				containsScript := strings.Contains(rec.Body.String(), "analytics.lucor.dev/script.js")
-				assert.Equal(t, host == "lancert.dev", containsScript)
-			})
-		}
-	}
-}
-
-func TestGetCert_NotFound(t *testing.T) {
-	h := newTestHandler(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/certs/192.168.1.50", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusNotFound, rec.Code)
-}
-
-func TestGetCert_InvalidIP(t *testing.T) {
-	h := newTestHandler(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/certs/8.8.8.8", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
-}
-
-func TestIssueCertInitialIssuanceRateLimit(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	limiter := NewInitialIssuanceRateLimiter(ctx)
-	const clientKey = "client-a"
-	for range InitialIssuanceBurst {
-		assert.True(t, limiter.Allow(clientKey))
-	}
-
-	store := certstore.New(t.TempDir())
-	svc := certservice.New(certservice.Config{Zone: "lancert.dev", Environment: acmeissue.EnvironmentStaging}, store, dnssrv.NewTXTStore(), metrics.Disabled{})
-	h := New(svc, nil, WithInitialIssuanceLimiter(limiter))
-	req := httptest.NewRequest(http.MethodPost, "/certs/192.168.1.50", nil)
-	req = req.WithContext(WithIssuanceClientKey(req.Context(), clientKey))
-	rec := httptest.NewRecorder()
-
-	h.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
-	retryAfter := rec.Header().Get("Retry-After")
-	assert.NotEmpty(t, retryAfter)
-	seconds, err := strconv.Atoi(retryAfter)
-	require.NoError(t, err)
-	assert.GreaterOrEqual(t, seconds, int(InitialIssuanceRefill/time.Second))
-	assert.Contains(t, rec.Body.String(), "initial certificate issuance rate limit exceeded")
-}
-
-func TestIssueCertCachedDoesNotConsumeInitialIssuanceCredit(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	limiter := NewInitialIssuanceRateLimiter(ctx)
-	const clientKey = "client-cache"
-	for range InitialIssuanceBurst - 1 {
-		require.True(t, limiter.Allow(clientKey))
-	}
-
-	store := certstore.New(t.TempDir())
-	addr := netip.MustParseAddr("192.168.1.50")
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	now := time.Now()
-	certDER, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{
-		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "cached"},
-		DNSNames:  []string{"cached.lancert.dev"},
-		NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour),
-	}, &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour)}, &key.PublicKey, key)
-	require.NoError(t, err)
-	keyDER, err := x509.MarshalECPrivateKey(key)
-	require.NoError(t, err)
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
-	require.NoError(t, store.Save(addr, keyPEM, [][]byte{certDER}))
-
-	svc := certservice.New(certservice.Config{Zone: "lancert.dev", Environment: acmeissue.EnvironmentStaging}, store, dnssrv.NewTXTStore(), metrics.Disabled{})
-	h := New(svc, nil, WithInitialIssuanceLimiter(limiter))
-	req := httptest.NewRequest(http.MethodPost, "/certs/192.168.1.50", nil).WithContext(WithIssuanceClientKey(context.Background(), clientKey))
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code)
-
-	// The cached request did not consume the last available token.
-	require.True(t, limiter.Allow(clientKey))
-}
-
-func TestGetFullChain_NotFound(t *testing.T) {
-	h := newTestHandler(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/certs/192.168.1.50/fullchain.pem", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusNotFound, rec.Code)
-}
-
-func TestGetFullChain_InvalidIP(t *testing.T) {
-	h := newTestHandler(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/certs/8.8.8.8/fullchain.pem", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
-}
-
-func TestGetPrivKey_NotFound(t *testing.T) {
-	h := newTestHandler(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/certs/192.168.1.50/privkey.pem", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusNotFound, rec.Code)
-}
-
-func TestGetPrivKey_InvalidIP(t *testing.T) {
-	h := newTestHandler(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/certs/8.8.8.8/privkey.pem", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
-}
-
-func TestGetTTL_NotFound(t *testing.T) {
-	h := newTestHandler(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/certs/192.168.1.50/ttl", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusNotFound, rec.Code)
-}
-
-func TestGetTTL_InvalidIP(t *testing.T) {
-	h := newTestHandler(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/certs/8.8.8.8/ttl", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
-}
-
-func TestWriteError_RetryAfterOn5xx(t *testing.T) {
-	rec := httptest.NewRecorder()
-	writeError(rec, http.StatusInternalServerError, "something broke")
-	assert.Equal(t, "3600", rec.Header().Get("Retry-After"))
-
-	rec = httptest.NewRecorder()
-	writeError(rec, http.StatusBadRequest, "bad input")
-	assert.Empty(t, rec.Header().Get("Retry-After"))
+func TestUpdateBodyLimit(t *testing.T) {
+	api := newTestAPI(t)
+	registered := register(t, api)
+	response := perform(api.handler, http.MethodPost, "/update", []byte(strings.Repeat("x", maxRequestBody+1)), map[string]string{
+		"X-Api-User": registered.Username,
+		"X-Api-Key":  registered.Password,
+	})
+	assert.Equal(t, http.StatusBadRequest, response.Code)
 }

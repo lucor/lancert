@@ -1,4 +1,5 @@
-package main
+// Package dnsconfig parses declarative DNS configuration used by Lancert.
+package dnsconfig
 
 import (
 	"encoding/json"
@@ -8,7 +9,7 @@ import (
 
 	"github.com/miekg/dns"
 
-	"lucor.dev/lancert/internal/dnssrv"
+	"go.lucor.dev/lancert/internal/dnssrv"
 )
 
 const defaultStaticTXTTTL uint32 = 300
@@ -18,7 +19,8 @@ type staticTXTConfig struct {
 	Values []string `json:"values"`
 }
 
-func parseStaticTXT(raw, zone string) (map[string]dnssrv.StaticTXTRecord, error) {
+// ParseStaticTXT parses the LANCERT_STATIC_TXT JSON configuration.
+func ParseStaticTXT(raw, zone string) (map[string]dnssrv.StaticTXTRecord, error) {
 	if raw == "" {
 		return nil, nil
 	}

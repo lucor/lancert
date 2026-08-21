@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>lancert — CLI Quickstart</title>
+  <meta name="description" content="Get and renew a trusted certificate for local development with the Lancert CLI.">
+  <meta name="theme-color" content="#FFFFFF">
+  <link rel="icon" href="/assets/favicon.ico" sizes="48x48">
+  <link rel="icon" href="/assets/favicon.svg" sizes="any" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+  <style>
+    :root { --lan:#078DE5; --lan-soft:#E5F4FE; --ink:#1a1a1a; --text:#374151; --muted:#6b7280; --line:#e5e7eb; --surface:#f9fafb; --bg:#fff; --mono:ui-monospace,"SFMono-Regular",Consolas,monospace; --sans:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    *,*::before,*::after { box-sizing:border-box; }
+    html { scroll-behavior:smooth; }
+    body { margin:0; color:var(--text); background:var(--bg); font:16px/1.65 var(--sans); -webkit-font-smoothing:antialiased; }
+    a { color:var(--lan); text-decoration:none; }
+    a:hover { text-decoration:underline; }
+    code,pre { font-family:var(--mono); }
+    code { padding:2px 6px; border:1px solid var(--line); border-radius:4px; color:#6B9E8A; background:var(--surface); font-size:.88em; }
+    .nav { max-width:1040px; margin:auto; padding:32px 24px 0; display:flex; align-items:center; justify-content:space-between; }
+    .logo img { display:block; width:128px; }
+    .nav-links { display:flex; align-items:center; gap:24px; }
+    .nav-links a { color:var(--muted); font-size:14px; font-weight:500; }
+    .nav-links a:hover,.nav-links .active { color:var(--ink); text-decoration:none; }
+    .gh-star { padding:5px 12px; border:1px solid var(--line); border-radius:6px; color:var(--ink)!important; font-size:13px!important; font-weight:600!important; }
+    .gh-star svg { width:15px; height:15px; margin-right:6px; vertical-align:-2px; fill:currentColor; }
+    .container { max-width:1040px; margin:auto; padding:48px 24px 80px; }
+    .breadcrumb { margin-bottom:32px; color:var(--muted); font-size:14px; }
+    .page-header { padding-bottom:36px; border-bottom:1px solid var(--line); }
+    .page-header h1 { margin:0 0 10px; color:var(--ink); font-size:40px; line-height:1.15; letter-spacing:-.035em; }
+    .subtitle { max-width:760px; margin:0; color:var(--muted); font-size:18px; }
+    .badges { display:flex; gap:8px; margin-top:20px; flex-wrap:wrap; }
+    .badge { padding:4px 10px; border-radius:99px; background:var(--lan-soft); color:#075e97; font-size:12px; font-weight:650; }
+    .guide { max-width:820px; margin-top:44px; }
+    .step { margin-bottom:46px; scroll-margin-top:24px; }
+    .step-head { display:flex; align-items:center; gap:12px; margin-bottom:12px; }
+    .step-number { display:grid; width:34px; height:34px; place-items:center; border-radius:50%; background:var(--lan-soft); color:var(--lan); font:700 13px var(--mono); }
+    h2 { margin:0; color:var(--ink); font-size:23px; letter-spacing:-.02em; }
+    h3 { margin:0 0 8px; color:var(--ink); font-size:17px; }
+    .callout { margin:20px 0; padding:16px 18px; border:1px solid #f0dfbd; border-radius:9px; background:#fff9ec; color:#6e5426; font-size:14px; }
+    .terminal { margin:18px 0; overflow:hidden; border-radius:10px; background:#1e1e1e; box-shadow:0 8px 28px rgba(0,0,0,.1); }
+    .terminal-bar { display:flex; align-items:center; gap:7px; padding:11px 15px; background:#2d2d2d; color:#aaa; font:12px var(--mono); }
+    .terminal-bar i { width:10px; height:10px; border-radius:50%; }
+    .terminal-bar .r { background:#ff5f57; } .terminal-bar .y { background:#febc2e; } .terminal-bar .g { background:#28c840; }
+    .terminal-title { margin-left:5px; }
+    pre { margin:0; padding:18px 20px; overflow:auto; color:#e5e7eb; font-size:13px; line-height:1.7; white-space:pre; }
+    .tabs { margin-top:20px; }
+    .tab-list { display:flex; gap:6px; padding:5px; border:1px solid var(--line); border-radius:9px; background:var(--surface); }
+    .tab { flex:1; padding:9px 12px; border:0; border-radius:6px; background:transparent; color:var(--muted); font:600 14px var(--sans); cursor:pointer; }
+    .tab[aria-selected="true"] { color:var(--ink); background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.1); }
+    .tab-panel { padding:24px 2px 0; }
+    .tab-panel[hidden] { display:none; }
+    .output { padding:14px 16px; border:1px solid var(--line); border-radius:8px; background:var(--surface); font-size:14px; }
+    .output strong { color:var(--ink); }
+    .site-footer { max-width:1040px; margin:auto; padding:28px 24px 36px; border-top:1px solid var(--line); color:var(--muted); font-size:13px; text-align:center; }
+    @media (max-width:700px) { .nav { padding:20px; flex-wrap:wrap; gap:16px; } .nav-links { gap:14px; flex-wrap:wrap; } .container { padding:36px 20px 60px; } .page-header h1 { font-size:32px; } .tab-list { display:grid; grid-template-columns:1fr; } }
+    :focus-visible { outline:2px solid var(--lan); outline-offset:2px; }
+  </style>
+</head>
+<body>
+  <nav class="nav">
+    <a href="/" class="logo" aria-label="lancert home"><img src="/assets/lancert-logo.svg" alt="lancert"></a>
+    <div class="nav-links">
+      <a href="/docs">Docs</a>
+      <a href="/docs/cli" class="active" aria-current="page">CLI</a>
+      <a href="/docs/acme-clients">ACME Clients</a>
+      <a href="/docs/api">API Reference</a>
+      <a href="/status">Status</a>
+      <a class="gh-star" href="https://github.com/lucor/lancert"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25z"/></svg>Star on GitHub</a>
+    </div>
+  </nav>
+  <main class="container">
+    <div class="breadcrumb"><a href="/docs">Documentation</a> / CLI Quickstart</div>
+    <header class="page-header">
+      <h1>Get a certificate with the CLI</h1>
+      <p class="subtitle">One command gives a local app a trusted certificate. The CLI also keeps renewal simple.</p>
+      <div class="badges"><span class="badge">Lancert CLI</span><span class="badge">Private IPv4</span><span class="badge">Let’s Encrypt</span></div>
+    </header>
+    <div class="guide">
+      <section class="step" id="install">
+        <div class="step-head"><span class="step-number">01</span><h2>Install the CLI</h2></div>
+        <p>Install the current CLI with Go:</p>
+        <div class="terminal"><div class="terminal-bar"><i class="r"></i><i class="y"></i><i class="g"></i><span class="terminal-title">Terminal</span></div><pre>go install go.lucor.dev/lancert-cli/cmd/lancert@latest</pre></div>
+      </section>
+      <section class="step" id="issue">
+        <div class="step-head"><span class="step-number">02</span><h2>Get the certificate</h2></div>
+        <p>Pass the private IPv4 address of your local app:</p>
+        <div class="terminal"><div class="terminal-bar"><i class="r"></i><i class="y"></i><i class="g"></i><span class="terminal-title">Terminal</span></div><pre>lancert 192.168.1.50</pre></div>
+        <p>On the first request, the CLI asks you to accept the certificate authority’s terms. It then prints the hostname and the paths to the certificate and private key.</p>
+        <div class="terminal"><div class="terminal-bar"><i class="r"></i><i class="y"></i><i class="g"></i><span class="terminal-title">Output</span></div><pre>Certificate issued.
+Hostname: quiet-otter.lancert.dev
+Certificate: /home/alice/.config/lancert/certs/quiet-otter.lancert.dev/fullchain.pem
+Private key: /home/alice/.config/lancert/certs/quiet-otter.lancert.dev/privkey.pem</pre></div>
+        <div class="callout"><strong>Let’s Encrypt is the default.</strong> Its terms, policies, and rate limits apply. Use <code>--acme-directory</code> to select another ACME-compatible certificate authority.</div>
+        <p>The certificate covers the assigned hostname and its wildcard. Your ACME account, certificate, and private key stay on your machine.</p>
+      </section>
+      <section class="step" id="configure">
+        <div class="step-head"><span class="step-number">03</span><h2>Configure your web server</h2></div>
+        <p>Use the certificate and private key paths printed by the CLI in your web server configuration.</p>
+        <div class="tabs" data-tabs>
+          <div class="tab-list" role="tablist" aria-label="Web servers">
+            <button class="tab" role="tab" id="server-caddy-tab" aria-controls="server-caddy" aria-selected="true">Caddy</button>
+            <button class="tab" role="tab" id="server-nginx-tab" aria-controls="server-nginx" aria-selected="false">Nginx</button>
+            <button class="tab" role="tab" id="server-traefik-tab" aria-controls="server-traefik" aria-selected="false">Traefik</button>
+          </div>
+          <section class="tab-panel" id="server-caddy" role="tabpanel" aria-labelledby="server-caddy-tab"><div class="terminal"><div class="terminal-bar"><i class="r"></i><i class="y"></i><i class="g"></i><span class="terminal-title">Caddyfile</span></div><pre>quiet-otter.lancert.dev, *.quiet-otter.lancert.dev {
+    tls /path/to/fullchain.pem /path/to/privkey.pem
+    reverse_proxy 127.0.0.1:3000
+}</pre></div><p>Reload with <code>caddy reload --force --config /path/to/Caddyfile</code>.</p></section>
+          <section class="tab-panel" id="server-nginx" role="tabpanel" aria-labelledby="server-nginx-tab" hidden><div class="terminal"><div class="terminal-bar"><i class="r"></i><i class="y"></i><i class="g"></i><span class="terminal-title">nginx.conf</span></div><pre>server {
+    listen 443 ssl;
+    server_name quiet-otter.lancert.dev *.quiet-otter.lancert.dev;
+
+    ssl_certificate     /path/to/fullchain.pem;
+    ssl_certificate_key /path/to/privkey.pem;
+
+    location / { proxy_pass http://127.0.0.1:3000; }
+}</pre></div><p>Validate and reload with <code>nginx -t &amp;&amp; nginx -s reload</code>.</p></section>
+          <section class="tab-panel" id="server-traefik" role="tabpanel" aria-labelledby="server-traefik-tab" hidden><div class="terminal"><div class="terminal-bar"><i class="r"></i><i class="y"></i><i class="g"></i><span class="terminal-title">dynamic/lancert.yml</span></div><pre>tls:
+  certificates:
+    - certFile: /path/to/fullchain.pem
+      keyFile: /path/to/privkey.pem</pre></div><p>Enable <code>providers.file.watch</code>. After renewal, touch the watched dynamic configuration file to reload the certificate.</p></section>
+        </div>
+      </section>
+      <section class="step" id="renew">
+        <div class="step-head"><span class="step-number">04</span><h2>Renew the certificate</h2></div>
+        <p>Run the CLI renewal command regularly from cron, systemd, or launchd:</p>
+        <div class="terminal"><div class="terminal-bar"><i class="r"></i><i class="y"></i><i class="g"></i><span class="terminal-title">Terminal</span></div><pre>lancert renew</pre></div>
+        <p>The CLI checks every locally managed certificate and renews those that are due.</p>
+      </section>
+      <section class="step">
+        <div class="step-head"><span class="step-number">↗</span><h2>Prefer another ACME client?</h2></div>
+        <p>Use Lancert’s DNS service with Lego, Certbot, acme.sh, or another compatible client. <a href="/docs/acme-clients">Open the ACME client guide</a>.</p>
+      </section>
+    </div>
+  </main>
+  <footer class="site-footer"><p>The <a href="https://github.com/lucor/lancert/blob/main/LICENSE">lancert software is MIT-licensed</a>. The software and DNS service are provided “as is”, without warranty.</p></footer>
+  <script>document.querySelectorAll('[data-tabs]').forEach(function(group){var tabs=Array.from(group.querySelectorAll('[role="tab"]'));tabs.forEach(function(tab){tab.addEventListener('click',function(){tabs.forEach(function(item){var selected=item===tab;item.setAttribute('aria-selected',String(selected));group.querySelector('#'+item.getAttribute('aria-controls')).hidden=!selected;});});tab.addEventListener('keydown',function(event){if(event.key!=='ArrowLeft'&&event.key!=='ArrowRight')return;event.preventDefault();var offset=event.key==='ArrowRight'?1:-1;var target=tabs[(tabs.indexOf(tab)+offset+tabs.length)%tabs.length];target.click();target.focus();});});});</script>
+</body>
+</html>

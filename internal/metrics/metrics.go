@@ -1,5 +1,4 @@
-// Package metrics records and persists privacy-preserving DNS and certificate
-// lifecycle KPI aggregates.
+// Package metrics records and persists privacy-preserving DNS aggregates.
 package metrics
 
 import (
@@ -7,17 +6,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"net/netip"
 	"os"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 
+	"go.lucor.dev/lancert/internal/migrations"
 	_ "modernc.org/sqlite"
 )
-
-const targetLimit = 20_000
 
 // LatencyBounds are the inclusive upper bounds of the fixed latency histogram.
 // The final bucket contains values greater than the final bound.
@@ -30,27 +25,20 @@ var LatencyBounds = [...]time.Duration{
 
 const histogramLen = len(LatencyBounds) + 1
 
-// Recorder is the minimal interface needed by the DNS serving path.
+// Recorder accepts the small set of observations produced by the API and DNS
+// serving paths.
 type Recorder interface {
-	RecordTarget(target netip.Addr)
+	RecordDNSQuery(registrationID string)
+	RecordChallengeUpdate(registrationID string)
 	RecordResponse(writeSucceeded bool, latency time.Duration)
-	RecordInitialIssuance(context.Context) error
-	RecordRenewal(context.Context, bool) error
 }
 
 // Disabled is a fail-open recorder. It intentionally discards every event.
 type Disabled struct{}
 
-func (Disabled) RecordTarget(netip.Addr)                     {}
-func (Disabled) RecordResponse(bool, time.Duration)          {}
-func (Disabled) RecordInitialIssuance(context.Context) error { return nil }
-func (Disabled) RecordRenewal(context.Context, bool) error   { return nil }
-
-// Breakdown is a query-volume-ranked KPI item.
-type Breakdown struct {
-	Name    string
-	Queries uint64
-}
+func (Disabled) RecordDNSQuery(string)              {}
+func (Disabled) RecordChallengeUpdate(string)       {}
+func (Disabled) RecordResponse(bool, time.Duration) {}
 
 // DailyLookup is an aggregate count for one UTC date.
 type DailyLookup struct {
@@ -58,58 +46,25 @@ type DailyLookup struct {
 	Queries uint64
 }
 
-// Readiness is the current certificate cache readiness result. It is kept
-// separate from historical DNS aggregates because the certificate store is
-// mutable and is rescanned periodically.
-type Readiness struct {
-	Total     uint64
-	Ready     uint64
-	Available bool
-	Degraded  bool
-	Error     string
-}
-
-// CertificateLifecycle is a best-effort, persistent aggregate of successful
-// certificate operations. Counters start at RecordedSince; they are not
-// reconstructed from the certificate store.
-type CertificateLifecycle struct {
-	RecordedSince    time.Time
-	InitialIssuances uint64
-	Renewals         uint64
-	ARIRenewals      uint64
-	TotalIssued      uint64
-	ARIAdoption      float64
-	HasARIAdoption   bool
-}
-
-// Snapshot is a point-in-time copy. Snapshot() deep-copies its slices, so a
-// caller cannot mutate the copy retained by the metrics service.
+// Snapshot is a point-in-time copy of the metrics used by status endpoints.
 type Snapshot struct {
-	Queries24H           uint64
-	WriteAttempts24H     uint64
-	WriteSuccesses24H    uint64
-	RecentQueries        uint64
-	RecentWindow         time.Duration
-	ResponseP95          time.Duration
-	ResponseP95Overflow  bool
-	DailyLookups         []DailyLookup
-	ActiveTargets30D     uint64
-	ActivePrefixes30D    uint64
-	TopBlocks            []Breakdown
-	TopPrefixes          []Breakdown
-	TopTargets           []Breakdown
-	OtherBlockQueries    uint64
-	OtherPrefixQueries   uint64
-	OtherTargetQueries   uint64
-	TrackingComplete     bool
-	FreshAt              time.Time
-	Degraded             bool
-	Unavailable          bool
-	Error                string
-	LastFlushAt          time.Time
-	LastFlushError       string
-	Readiness            Readiness
-	CertificateLifecycle CertificateLifecycle
+	Queries24H                 uint64
+	WriteAttempts24H           uint64
+	WriteSuccesses24H          uint64
+	RecentQueries              uint64
+	RecentWindow               time.Duration
+	ResponseP95                time.Duration
+	ResponseP95Overflow        bool
+	DailyLookups               []DailyLookup
+	ActiveRegistrations30D     uint64
+	ACMEActiveRegistrations30D uint64
+	ChallengeUpdates30D        uint64
+	FreshAt                    time.Time
+	Degraded                   bool
+	Unavailable                bool
+	Error                      string
+	LastFlushAt                time.Time
+	LastFlushError             string
 }
 
 // Option configures a Store.
@@ -144,12 +99,12 @@ type minuteBucket struct {
 	aggregate
 }
 
-type targetQuery struct {
-	ip uint32
-	q  uint64
+type registrationActivity struct {
+	dnsQueries       uint64
+	challengeUpdates uint64
 }
 
-// Store is a bounded-memory recorder backed by SQLite.
+// Store buffers aggregate observations in memory and persists them to SQLite.
 type Store struct {
 	db      *sql.DB
 	cfg     config
@@ -157,11 +112,8 @@ type Store struct {
 
 	mu            sync.Mutex
 	pendingHourly map[time.Time]aggregate
-	pendingDaily  map[string]map[uint32]uint64
+	pendingDaily  map[string]map[string]registrationActivity
 	recent        [5]minuteBucket
-	currentDate   string
-	current       map[uint32]uint64
-	dropped       map[string]uint64
 
 	flushMu      sync.Mutex
 	snapMu       sync.RWMutex
@@ -171,10 +123,9 @@ type Store struct {
 	closeOnce    sync.Once
 	lastFlushAt  time.Time
 	lastFlushErr error
-	readiness    Readiness
 }
 
-// Open opens path, migrates it, restores today's cap state, and starts workers.
+// Open opens path, migrates it, and starts the background workers.
 func Open(path string, options ...Option) (*Store, error) {
 	c := config{now: time.Now, flushInterval: time.Minute, snapshotInterval: time.Minute, startWorker: true}
 	for _, option := range options {
@@ -205,13 +156,12 @@ func Open(path string, options ...Option) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("metrics: configure: %w", err)
 	}
-	s := &Store{db: db, cfg: c, started: c.now().UTC(), pendingHourly: make(map[time.Time]aggregate), pendingDaily: make(map[string]map[uint32]uint64), current: make(map[uint32]uint64), dropped: make(map[string]uint64), stop: make(chan struct{}), done: make(chan struct{})}
-	if err = s.migrate(context.Background()); err == nil {
-		err = s.restore(context.Background())
+	if err = migrations.RunMetrics(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("metrics: migrate: %w", err)
 	}
-	if err == nil {
-		err = s.RebuildSnapshot(context.Background())
-	}
+	s := &Store{db: db, cfg: c, started: c.now().UTC(), pendingHourly: make(map[time.Time]aggregate), pendingDaily: make(map[string]map[string]registrationActivity), stop: make(chan struct{}), done: make(chan struct{})}
+	err = s.RebuildSnapshot(context.Background())
 	if err != nil {
 		db.Close()
 		return nil, err
@@ -233,106 +183,9 @@ func UnavailableSnapshot(err error) Snapshot {
 	return s
 }
 
-func (s *Store) migrate(ctx context.Context) error {
-	const schema = `
-CREATE TABLE IF NOT EXISTS dns_hourly (hour TEXT PRIMARY KEY, queries INTEGER NOT NULL, write_attempts INTEGER NOT NULL, write_successes INTEGER NOT NULL, latency_count INTEGER NOT NULL, latency_sum_us INTEGER NOT NULL, latency_max_us INTEGER NOT NULL, h0 INTEGER NOT NULL, h1 INTEGER NOT NULL, h2 INTEGER NOT NULL, h3 INTEGER NOT NULL, h4 INTEGER NOT NULL, h5 INTEGER NOT NULL, h6 INTEGER NOT NULL, h7 INTEGER NOT NULL, h8 INTEGER NOT NULL, h9 INTEGER NOT NULL, h10 INTEGER NOT NULL, h11 INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS target_activity_daily (date TEXT NOT NULL, target INTEGER NOT NULL CHECK(target BETWEEN 0 AND 4294967295), queries INTEGER NOT NULL, PRIMARY KEY(date,target));
-CREATE TABLE IF NOT EXISTS kpi_daily (date TEXT PRIMARY KEY, active_targets INTEGER NOT NULL, active_prefixes INTEGER NOT NULL, tracking_complete INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS certificate_lifecycle (id INTEGER PRIMARY KEY CHECK(id=1), recorded_since INTEGER NOT NULL, baseline_initialized INTEGER NOT NULL DEFAULT 0, initial_issuances INTEGER NOT NULL DEFAULT 0, renewals INTEGER NOT NULL DEFAULT 0, ari_renewals INTEGER NOT NULL DEFAULT 0);
-`
-	if _, err := s.db.ExecContext(ctx, schema); err != nil {
-		return fmt.Errorf("metrics: migrate: %w", err)
-	}
-	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO certificate_lifecycle(id, recorded_since) VALUES(1, ?)`, s.cfg.now().UTC().Unix()); err != nil {
-		return fmt.Errorf("metrics: migrate lifecycle: %w", err)
-	}
-	for _, statement := range []string{
-		`ALTER TABLE certificate_lifecycle ADD COLUMN baseline_initialized INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE dns_hourly ADD COLUMN latency_count INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE dns_hourly ADD COLUMN latency_sum_us INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE dns_hourly ADD COLUMN latency_max_us INTEGER NOT NULL DEFAULT 0`,
-	} {
-		if _, err := s.db.ExecContext(ctx, statement); err != nil && !isDuplicateColumn(err) {
-			return fmt.Errorf("metrics: migrate: %w", err)
-		}
-	}
-	return nil
-}
-
-// InitializeCertificateLifecycle seeds the counters once from certificates
-// already present when lifecycle metrics are introduced. Those certificates
-// are intentionally treated as initial issuances; earlier renewal history is
-// not reconstructed. RecordedSince uses since when available, or the current
-// time when the existing bundles have no issuance metadata.
-func (s *Store) InitializeCertificateLifecycle(ctx context.Context, issued uint64, since time.Time) error {
-	if since.IsZero() {
-		since = s.cfg.now()
-	}
-	unix := since.UTC().Unix()
-	result, err := s.db.ExecContext(ctx, `UPDATE certificate_lifecycle SET recorded_since=?, baseline_initialized=1, initial_issuances=initial_issuances+? WHERE id=1 AND baseline_initialized=0`, unix, int64(issued))
-	if err != nil {
-		return fmt.Errorf("metrics: initialize certificate lifecycle: %w", err)
-	}
-	changed, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("metrics: initialize certificate lifecycle: %w", err)
-	}
-	if changed == 0 {
-		return nil
-	}
-	return s.RebuildSnapshot(ctx)
-}
-
-// RecordInitialIssuance records a successfully persisted first issuance.
-func (s *Store) RecordInitialIssuance(ctx context.Context) error {
-	return s.recordLifecycle(ctx, "initial_issuances")
-}
-
-// RecordRenewal records a successfully persisted replacement. ARI-driven
-// identifies the scheduling decision, including retries after the ARI window.
-func (s *Store) RecordRenewal(ctx context.Context, ariDriven bool) error {
-	query := `UPDATE certificate_lifecycle SET renewals=renewals+1`
-	if ariDriven {
-		query += `, ari_renewals=ari_renewals+1`
-	}
-	query += ` WHERE id=1`
-	if _, err := s.db.ExecContext(ctx, query); err != nil {
-		return fmt.Errorf("metrics: record lifecycle: %w", err)
-	}
-	return nil
-}
-
-func (s *Store) recordLifecycle(ctx context.Context, column string) error {
-	switch column {
-	case "initial_issuances", "renewals", "ari_renewals":
-	default:
-		return errors.New("metrics: invalid lifecycle counter")
-	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE certificate_lifecycle SET `+column+`=`+column+`+1 WHERE id=1`); err != nil {
-		return fmt.Errorf("metrics: record lifecycle: %w", err)
-	}
-	return nil
-}
-
-func isDuplicateColumn(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "duplicate column name")
-}
-
 func dateOf(t time.Time) string      { return t.UTC().Format("2006-01-02") }
 func hourOf(t time.Time) time.Time   { return t.UTC().Truncate(time.Hour) }
 func minuteOf(t time.Time) time.Time { return t.UTC().Truncate(time.Minute) }
-
-func addrUint32(a netip.Addr) (uint32, bool) {
-	if !a.Is4() {
-		return 0, false
-	}
-	b := a.As4()
-	return uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3]), true
-}
-
-func uint32Addr(v uint32) netip.Addr {
-	return netip.AddrFrom4([4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)})
-}
 
 func histIndex(d time.Duration) int {
 	for i, bound := range LatencyBounds {
@@ -343,12 +196,8 @@ func histIndex(d time.Duration) int {
 	return histogramLen - 1
 }
 
-// RecordTarget records one valid target question without SQL or I/O.
-func (s *Store) RecordTarget(target netip.Addr) {
-	ip, ok := addrUint32(target)
-	if !ok {
-		return
-	}
+// RecordDNSQuery records one DNS request and, when known, its registration.
+func (s *Store) RecordDNSQuery(registrationID string) {
 	now := s.cfg.now().UTC()
 	hour, minute, date := hourOf(now), minuteOf(now), dateOf(now)
 	s.mu.Lock()
@@ -365,18 +214,29 @@ func (s *Store) RecordTarget(target netip.Addr) {
 	}
 	r := &s.recent[i].aggregate
 	r.queries++
-	if date != s.currentDate {
-		s.currentDate, s.current = date, make(map[uint32]uint64)
+	if registrationID != "" {
+		s.recordActivity(date, registrationID, registrationActivity{dnsQueries: 1})
 	}
-	if _, exists := s.current[ip]; !exists && len(s.current) >= targetLimit {
-		s.dropped[date]++
+}
+
+// RecordChallengeUpdate records one authenticated, accepted DNS-01 update.
+func (s *Store) RecordChallengeUpdate(registrationID string) {
+	if registrationID == "" {
 		return
 	}
-	s.current[ip]++
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recordActivity(dateOf(s.cfg.now()), registrationID, registrationActivity{challengeUpdates: 1})
+}
+
+func (s *Store) recordActivity(date, registrationID string, observation registrationActivity) {
 	if s.pendingDaily[date] == nil {
-		s.pendingDaily[date] = make(map[uint32]uint64)
+		s.pendingDaily[date] = make(map[string]registrationActivity)
 	}
-	s.pendingDaily[date][ip]++
+	activity := s.pendingDaily[date][registrationID]
+	activity.dnsQueries += observation.dnsQueries
+	activity.challengeUpdates += observation.challengeUpdates
+	s.pendingDaily[date][registrationID] = activity
 }
 
 // RecordResponse records one DNS response-write observation without SQL or I/O.
@@ -415,33 +275,6 @@ func recordResponse(a *aggregate, succeeded bool, latency time.Duration, us uint
 	a.hist[histIndex(latency)]++
 }
 
-func (s *Store) restore(ctx context.Context) error {
-	now := s.cfg.now().UTC()
-	date := dateOf(now)
-	s.currentDate = date
-	rows, err := s.db.QueryContext(ctx, `SELECT target,queries FROM target_activity_daily WHERE date=?`, date)
-	if err != nil {
-		return fmt.Errorf("metrics: restore: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var ip int64
-		var n uint64
-		if err := rows.Scan(&ip, &n); err != nil {
-			return err
-		}
-		s.current[uint32(ip)] = n
-	}
-	var complete int
-	err = s.db.QueryRowContext(ctx, `SELECT tracking_complete FROM kpi_daily WHERE date=?`, date).Scan(&complete)
-	if err == nil && complete == 0 {
-		s.dropped[date] = 1
-	} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return err
-	}
-	return rows.Err()
-}
-
 func (s *Store) run() {
 	ft, st := time.NewTicker(s.cfg.flushInterval), time.NewTicker(s.cfg.snapshotInterval)
 	defer func() { ft.Stop(); st.Stop(); close(s.done) }()
@@ -463,10 +296,10 @@ func (s *Store) Flush(ctx context.Context) error {
 	s.flushMu.Lock()
 	defer s.flushMu.Unlock()
 	s.mu.Lock()
-	hours, days, dropped := s.pendingHourly, s.pendingDaily, s.dropped
-	s.pendingHourly, s.pendingDaily, s.dropped = make(map[time.Time]aggregate), make(map[string]map[uint32]uint64), make(map[string]uint64)
+	hours, days := s.pendingHourly, s.pendingDaily
+	s.pendingHourly, s.pendingDaily = make(map[time.Time]aggregate), make(map[string]map[string]registrationActivity)
 	s.mu.Unlock()
-	err := s.flushBatch(ctx, hours, days, dropped)
+	err := s.flushBatch(ctx, hours, days)
 	s.mu.Lock()
 	if err == nil {
 		s.lastFlushAt = s.cfg.now().UTC()
@@ -482,16 +315,16 @@ func (s *Store) Flush(ctx context.Context) error {
 			addAggregate(&a, v)
 			s.pendingHourly[k] = a
 		}
-		for d, targets := range days {
-			if s.pendingDaily[d] == nil {
-				s.pendingDaily[d] = make(map[uint32]uint64)
+		for date, registrations := range days {
+			if s.pendingDaily[date] == nil {
+				s.pendingDaily[date] = make(map[string]registrationActivity)
 			}
-			for ip, n := range targets {
-				s.pendingDaily[d][ip] += n
+			for registrationID, activity := range registrations {
+				pending := s.pendingDaily[date][registrationID]
+				pending.dnsQueries += activity.dnsQueries
+				pending.challengeUpdates += activity.challengeUpdates
+				s.pendingDaily[date][registrationID] = pending
 			}
-		}
-		for d, n := range dropped {
-			s.dropped[d] += n
 		}
 		s.mu.Unlock()
 	}
@@ -512,7 +345,7 @@ func addAggregate(a *aggregate, b aggregate) {
 	}
 }
 
-func (s *Store) flushBatch(ctx context.Context, hours map[time.Time]aggregate, days map[string]map[uint32]uint64, dropped map[string]uint64) error {
+func (s *Store) flushBatch(ctx context.Context, hours map[time.Time]aggregate, days map[string]map[string]registrationActivity) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -524,53 +357,17 @@ func (s *Store) flushBatch(ctx context.Context, hours map[time.Time]aggregate, d
 			return err
 		}
 	}
-	for date, targets := range days {
-		for ip, n := range targets {
-			if _, err = tx.ExecContext(ctx, `INSERT INTO target_activity_daily(date,target,queries) VALUES(?,?,?) ON CONFLICT(date,target) DO UPDATE SET queries=queries+excluded.queries`, date, int64(ip), n); err != nil {
+	for date, registrations := range days {
+		for registrationID, activity := range registrations {
+			if _, err = tx.ExecContext(ctx, `INSERT INTO registration_activity_daily(date,registration_id,dns_queries,challenge_updates) VALUES(?,?,?,?) ON CONFLICT(date,registration_id) DO UPDATE SET dns_queries=dns_queries+excluded.dns_queries,challenge_updates=challenge_updates+excluded.challenge_updates`, date, registrationID, activity.dnsQueries, activity.challengeUpdates); err != nil {
 				return err
 			}
 		}
-	}
-	dates := unionDates(days, dropped)
-	// Materialize a daily rolling snapshot even when the current day has no
-	// new DNS observations. This keeps the historical KPI series continuous.
-	dates[dateOf(s.cfg.now())] = struct{}{}
-	for date := range dates {
-		var targets, prefixes uint64
-		if err = tx.QueryRowContext(ctx, `SELECT count(*),count(DISTINCT (target >> 8)) FROM target_activity_daily WHERE date BETWEEN date(?,'-29 days') AND ?`, date, date).Scan(&targets, &prefixes); err != nil {
-			return err
-		}
-		complete := 1
-		var incomplete int
-		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM kpi_daily WHERE date BETWEEN date(?,'-29 days') AND ? AND tracking_complete=0`, date, date).Scan(&incomplete); err != nil {
-			return err
-		}
-		if incomplete > 0 || dropped[date] > 0 {
-			complete = 0
-		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO kpi_daily VALUES(?,?,?,?) ON CONFLICT(date) DO UPDATE SET active_targets=excluded.active_targets,active_prefixes=excluded.active_prefixes,tracking_complete=MIN(kpi_daily.tracking_complete,excluded.tracking_complete)`, date, targets, prefixes, complete); err != nil {
-			return err
-		}
-	}
-	cutoff := s.cfg.now().UTC().AddDate(0, 0, -34).Format("2006-01-02")
-	if _, err = tx.ExecContext(ctx, `DELETE FROM target_activity_daily WHERE date < ?`, cutoff); err != nil {
-		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("metrics: flush: %w", err)
 	}
 	return nil
-}
-
-func unionDates(a map[string]map[uint32]uint64, b map[string]uint64) map[string]struct{} {
-	r := make(map[string]struct{})
-	for k := range a {
-		r[k] = struct{}{}
-	}
-	for k := range b {
-		r[k] = struct{}{}
-	}
-	return r
 }
 
 // RebuildSnapshot reads SQLite and recent RAM into a new snapshot.
@@ -579,17 +376,6 @@ func (s *Store) RebuildSnapshot(ctx context.Context) error {
 	cutoff := now.Add(-23 * time.Hour).Truncate(time.Hour).Format(time.RFC3339)
 	var out Snapshot
 	out.FreshAt = now
-	out.TrackingComplete = true
-	var recordedUnix int64
-	if err := s.db.QueryRowContext(ctx, `SELECT recorded_since,initial_issuances,renewals,ari_renewals FROM certificate_lifecycle WHERE id=1`).Scan(&recordedUnix, &out.CertificateLifecycle.InitialIssuances, &out.CertificateLifecycle.Renewals, &out.CertificateLifecycle.ARIRenewals); err != nil {
-		return s.snapshotError(err)
-	}
-	out.CertificateLifecycle.RecordedSince = time.Unix(recordedUnix, 0).UTC()
-	out.CertificateLifecycle.TotalIssued = out.CertificateLifecycle.InitialIssuances + out.CertificateLifecycle.Renewals
-	if out.CertificateLifecycle.Renewals > 0 {
-		out.CertificateLifecycle.ARIAdoption = float64(out.CertificateLifecycle.ARIRenewals) * 100 / float64(out.CertificateLifecycle.Renewals)
-		out.CertificateLifecycle.HasARIAdoption = true
-	}
 	var responseHist [histogramLen]uint64
 	row := s.db.QueryRowContext(ctx, `SELECT COALESCE(sum(queries),0),COALESCE(sum(write_attempts),0),COALESCE(sum(write_successes),0),COALESCE(sum(h0),0),COALESCE(sum(h1),0),COALESCE(sum(h2),0),COALESCE(sum(h3),0),COALESCE(sum(h4),0),COALESCE(sum(h5),0),COALESCE(sum(h6),0),COALESCE(sum(h7),0),COALESCE(sum(h8),0),COALESCE(sum(h9),0),COALESCE(sum(h10),0),COALESCE(sum(h11),0) FROM dns_hourly WHERE hour>=?`, cutoff)
 	if err := row.Scan(&out.Queries24H, &out.WriteAttempts24H, &out.WriteSuccesses24H, &responseHist[0], &responseHist[1], &responseHist[2], &responseHist[3], &responseHist[4], &responseHist[5], &responseHist[6], &responseHist[7], &responseHist[8], &responseHist[9], &responseHist[10], &responseHist[11]); err != nil {
@@ -619,44 +405,25 @@ func (s *Store) RebuildSnapshot(ctx context.Context) error {
 		date := dateOf(day)
 		out.DailyLookups = append(out.DailyLookups, DailyLookup{Date: date, Queries: daily[date]})
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT target,sum(queries) FROM target_activity_daily WHERE date BETWEEN ? AND ? GROUP BY target`, startDate, endDate)
-	if err != nil {
+	const activityQuery = `
+SELECT count(*),
+       COALESCE(sum(CASE WHEN challenge_updates > 0 THEN 1 ELSE 0 END),0),
+       COALESCE(sum(challenge_updates),0)
+FROM (
+    SELECT registration_id,sum(challenge_updates) AS challenge_updates
+    FROM registration_activity_daily
+    WHERE date BETWEEN ? AND ?
+    GROUP BY registration_id
+)`
+	if err = s.db.QueryRowContext(ctx, activityQuery, startDate, endDate).Scan(
+		&out.ActiveRegistrations30D,
+		&out.ACMEActiveRegistrations30D,
+		&out.ChallengeUpdates30D,
+	); err != nil {
 		return s.snapshotError(err)
 	}
-	var all []targetQuery
-	for rows.Next() {
-		var ip int64
-		var q uint64
-		if err = rows.Scan(&ip, &q); err != nil {
-			rows.Close()
-			return s.snapshotError(err)
-		}
-		all = append(all, targetQuery{uint32(ip), q})
-	}
-	err = rows.Close()
-	if err != nil {
-		return s.snapshotError(err)
-	}
-	var incomplete int
-	if err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM kpi_daily WHERE date BETWEEN ? AND ? AND tracking_complete=0`, startDate, endDate).Scan(&incomplete); err != nil {
-		return s.snapshotError(err)
-	}
-	out.TrackingComplete = incomplete == 0
 	s.mu.Lock()
-	for date, count := range s.dropped {
-		if count > 0 && date >= startDate && date <= endDate {
-			out.TrackingComplete = false
-		}
-	}
 	lastFlushAt, lastFlushErr := s.lastFlushAt, s.lastFlushErr
-	s.mu.Unlock()
-	if out.TrackingComplete {
-		populateTargets(&out, all)
-	} else {
-		out.Degraded = true
-		out.Error = "target tracking incomplete"
-	}
-	s.mu.Lock()
 	var recent aggregate
 	for _, b := range s.recent {
 		if !b.minute.IsZero() && now.Sub(b.minute) < 5*time.Minute && now.Sub(b.minute) >= 0 {
@@ -678,57 +445,9 @@ func (s *Store) RebuildSnapshot(ctx context.Context) error {
 		out.LastFlushError = lastFlushErr.Error()
 	}
 	s.snapMu.Lock()
-	applyReadiness(&out, s.readiness)
 	s.snap = out
 	s.snapMu.Unlock()
 	return nil
-}
-
-// SetReadiness updates the current certificate readiness without touching the
-// historical DNS aggregates.
-func (s *Store) SetReadiness(readiness Readiness) {
-	s.snapMu.Lock()
-	previous := s.snap.Readiness
-	s.readiness = readiness
-	if previous.Degraded && s.snap.Error == previous.Error {
-		s.snap.Error = ""
-	}
-	s.snap.Degraded = s.snap.Unavailable || !s.snap.TrackingComplete || s.snap.LastFlushError != "" || s.snap.Error != ""
-	applyReadiness(&s.snap, readiness)
-	s.snapMu.Unlock()
-}
-
-func applyReadiness(snapshot *Snapshot, readiness Readiness) {
-	snapshot.Readiness = readiness
-	if !readiness.Degraded {
-		return
-	}
-	snapshot.Degraded = true
-	if snapshot.Error == "" {
-		snapshot.Error = readiness.Error
-	}
-}
-
-func populateTargets(out *Snapshot, all []targetQuery) {
-	blocks, prefixes, targets := make(map[string]uint64), make(map[string]uint64), make(map[string]uint64)
-	for _, item := range all {
-		addr := uint32Addr(item.ip)
-		targets[addr.String()] += item.q
-		prefixes[netip.PrefixFrom(addr, 24).Masked().String()] += item.q
-		switch {
-		case item.ip>>24 == 10:
-			blocks["10.0.0.0/8"] += item.q
-		case item.ip >= 0xac100000 && item.ip <= 0xac1fffff:
-			blocks["172.16.0.0/12"] += item.q
-		case item.ip>>16 == 0xc0a8:
-			blocks["192.168.0.0/16"] += item.q
-		}
-	}
-	out.ActiveTargets30D = uint64(len(all))
-	out.ActivePrefixes30D = uint64(len(prefixes))
-	out.TopBlocks, out.OtherBlockQueries = top20(blocks)
-	out.TopPrefixes, out.OtherPrefixQueries = top20(prefixes)
-	out.TopTargets, out.OtherTargetQueries = top20(targets)
 }
 
 func (s *Store) snapshotError(err error) error {
@@ -766,9 +485,6 @@ func (s *Store) Snapshot() Snapshot {
 	s.snapMu.RLock()
 	defer s.snapMu.RUnlock()
 	r := s.snap
-	r.TopBlocks = append([]Breakdown(nil), r.TopBlocks...)
-	r.TopPrefixes = append([]Breakdown(nil), r.TopPrefixes...)
-	r.TopTargets = append([]Breakdown(nil), r.TopTargets...)
 	r.DailyLookups = append([]DailyLookup(nil), r.DailyLookups...)
 	return r
 }
@@ -789,26 +505,4 @@ func (s *Store) Close(ctx context.Context) error {
 		}
 	})
 	return err
-}
-
-func top20(m map[string]uint64) ([]Breakdown, uint64) {
-	r := make([]Breakdown, 0, len(m))
-	for k, v := range m {
-		r = append(r, Breakdown{k, v})
-	}
-	sort.Slice(r, func(i, j int) bool {
-		if r[i].Queries == r[j].Queries {
-			return r[i].Name < r[j].Name
-		}
-		return r[i].Queries > r[j].Queries
-	})
-	if len(r) > 20 {
-		var other uint64
-		for _, item := range r[20:] {
-			other += item.Queries
-		}
-		r = r[:20]
-		return r, other
-	}
-	return r, 0
 }

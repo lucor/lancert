@@ -36,23 +36,6 @@ func TestIPHasher_Hash_KnownAnswer(t *testing.T) {
 	assert.Equal(t, "6c4d87fbe83916df59517fa983340507", got)
 }
 
-func TestIPHasher_IssuanceClientHashGroupsIPv6By64(t *testing.T) {
-	h := NewIPHasher("test-secret")
-
-	assert.Equal(t,
-		h.IssuanceClientHash("2001:db8:1234:5678::1"),
-		h.IssuanceClientHash("2001:db8:1234:5678::ffff"),
-	)
-	assert.NotEqual(t,
-		h.IssuanceClientHash("2001:db8:1234:5678::1"),
-		h.IssuanceClientHash("2001:db8:1234:5679::1"),
-	)
-	assert.NotEqual(t,
-		h.IssuanceClientHash("192.0.2.1"),
-		h.IssuanceClientHash("192.0.2.2"),
-	)
-}
-
 func TestIPHasher_Hash_Concurrent(t *testing.T) {
 	h := NewIPHasher("test-secret")
 	var wg sync.WaitGroup
@@ -72,11 +55,9 @@ func TestIPHasher_Middleware(t *testing.T) {
 
 	t.Run("hashes IP from context", func(t *testing.T) {
 		var got string
-		var issuanceKey string
 		var ok bool
 		inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			got, ok = HashedIPFromContext(r.Context())
-			issuanceKey, _ = IssuanceClientKeyFromContext(r.Context())
 		})
 
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -86,7 +67,6 @@ func TestIPHasher_Middleware(t *testing.T) {
 
 		assert.True(t, ok)
 		assert.Equal(t, h.Hash("95.12.34.56"), got)
-		assert.Equal(t, h.IssuanceClientHash("95.12.34.56"), issuanceKey)
 	})
 
 	t.Run("returns 500 without leaking internals when IP missing", func(t *testing.T) {

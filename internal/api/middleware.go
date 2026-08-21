@@ -7,8 +7,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"lucor.dev/lancert/internal/certservice"
 )
 
 // Middleware wraps an http.Handler.
@@ -22,13 +20,12 @@ func Chain(h http.Handler, mws ...Middleware) http.Handler {
 	return h
 }
 
-// RequestLogging logs method, path, status, and duration for API requests.
-// Only /certs/ paths are logged — operational endpoints, static pages, and
-// bot probes are silenced to reduce noise.
+// RequestLogging logs update requests without credential headers or bodies.
+// Registration paths are deliberately excluded because they contain private IPs.
 // Reads the hashed client IP from the request context (set by IPHasher middleware).
 func RequestLogging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/certs/") {
+		if r.URL.Path != "/update" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -53,53 +50,6 @@ func RequestLogging(next http.Handler) http.Handler {
 			"client_ip", ip,
 		)
 	})
-}
-
-const (
-	suspensionRetryAfter     = "86400"
-	issuanceSuspendedCode    = "certificate_issuance_suspended"
-	downloadSuspendedCode    = "certificate_download_suspended"
-	issuanceSuspendedMessage = "Certificate issuance has been discontinued for the current Lancert service."
-	downloadSuspendedMessage = "Certificate downloads are unavailable. All unexpired certificates previously issued by Lancert were revoked on 30 July 2026."
-)
-
-// CertificateSuspension blocks certificate issuance and material distribution
-// while leaving TTL, health, status, static pages, and DNS unaffected.
-func CertificateSuspension(service *certservice.Service) Middleware {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !service.Suspended() {
-				next.ServeHTTP(w, r)
-				return
-			}
-
-			code := ""
-			event := ""
-			message := ""
-			switch {
-			case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/certs/"):
-				code = issuanceSuspendedCode
-				event = "certificate issuance request blocked"
-				message = issuanceSuspendedMessage
-			case r.Method == http.MethodGet &&
-				strings.HasPrefix(r.URL.Path, "/certs/") &&
-				!strings.HasSuffix(r.URL.Path, "/ttl"):
-				code = downloadSuspendedCode
-				event = "certificate download request blocked"
-				message = downloadSuspendedMessage
-			default:
-				next.ServeHTTP(w, r)
-				return
-			}
-
-			slog.Info(event, "path", r.URL.Path)
-			w.Header().Set("Retry-After", suspensionRetryAfter)
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-				"error":   code,
-				"message": message,
-			})
-		})
-	}
 }
 
 // GzipResponse compresses responses with gzip when the client accepts it.
@@ -135,8 +85,7 @@ func (w *gzipWriter) Write(b []byte) (int, error) {
 	return w.Writer.Write(b)
 }
 
-// SecurityHeaders sets security-related response headers on every response.
-// Cache-Control: no-store is critical because API responses may contain private keys.
+// SecurityHeaders prevents caching API credentials and challenge responses.
 func SecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")

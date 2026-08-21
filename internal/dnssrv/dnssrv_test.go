@@ -1,7 +1,6 @@
 package dnssrv
 
 import (
-	"context"
 	"net/netip"
 	"strings"
 	"sync"
@@ -11,238 +10,227 @@ import (
 	"github.com/miekg/dns"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.lucor.dev/lancert/internal/registration"
 )
 
-type testRecorder struct {
-	mu        sync.Mutex
-	targets   []netip.Addr
-	responses int
-	successes int
+const (
+	testZone     = "lancert.dev."
+	testHostname = "quiet-otter"
+)
+
+type testState struct {
+	mu      sync.RWMutex
+	records map[string]registration.Registration
 }
 
-func (r *testRecorder) RecordTarget(addr netip.Addr) {
+func (s *testState) Lookup(hostname string) (registration.Registration, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	r, ok := s.records[hostname]
+	return r, ok
+}
+
+type testRecorder struct {
+	mu            sync.Mutex
+	registrations []string
+	responses     int
+}
+
+func (r *testRecorder) RecordDNSQuery(registrationID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.targets = append(r.targets, addr)
+	r.registrations = append(r.registrations, registrationID)
 }
-func (r *testRecorder) RecordResponse(success bool, _ time.Duration) {
+
+func (r *testRecorder) RecordResponse(bool, time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.responses++
-	if success {
-		r.successes++
-	}
 }
 
-func (r *testRecorder) snapshot() ([]netip.Addr, int, int) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]netip.Addr(nil), r.targets...), r.responses, r.successes
-}
-
-const testZone = "lancert.dev."
-
-// startTestServer launches a DNS server on a random port and returns
-// the address and a cleanup function.
-func startTestServer(t *testing.T, recorders ...Recorder) (*Server, string) {
+func startTestServer(t *testing.T, recorder Recorder) (*Server, string, *testState) {
 	t.Helper()
-
-	store := NewTXTStore()
+	state := &testState{records: map[string]registration.Registration{
+		testHostname: {
+			ID:         "01900000-0000-7000-8000-000000000000",
+			Hostname:   testHostname,
+			TargetIP:   netip.MustParseAddr("192.168.1.50"),
+			Challenges: [2]string{"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"},
+		},
+	}}
 	cfg := Config{
-		Zone:       testZone,
-		NSRecords:  []string{"ns1.lancert.dev.", "ns2.lancert.dev."},
-		ServerIP:   netip.MustParseAddr("5.9.100.1"),
-		SOAMname:   "ns1.lancert.dev.",
-		SOARname:   "admin.lancert.dev.",
-		CAAIssuers: []string{"letsencrypt.org"},
+		Zone:      testZone,
+		NSRecords: []string{"ns1.lancert.dev.", "ns2.lancert.dev."},
+		ServerIP:  netip.MustParseAddr("5.9.100.1"),
+		SOAMname:  "ns1.lancert.dev.",
+		SOARname:  "admin.lancert.dev.",
+		StaticTXT: map[string]StaticTXTRecord{
+			testZone: {TTL: 600, Values: []string{"verification"}},
+		},
+		Recorder: recorder,
 	}
-	if len(recorders) > 0 {
-		cfg.Recorder = recorders[0]
-	}
-
-	srv := New(cfg, store)
-
-	// Start on random port
-	mux := dns.NewServeMux()
-	mux.HandleFunc(cfg.Zone, srv.handleQuery)
-
-	srv.udp = &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: mux}
-
+	srv := New(cfg, state)
+	srv.udp = &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: srv.mux}
 	started := make(chan struct{})
 	srv.udp.NotifyStartedFunc = func() { close(started) }
-
-	serverErr := make(chan error, 1)
-	go func() {
-		serverErr <- srv.udp.ListenAndServe()
-	}()
-
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.udp.ListenAndServe() }()
 	select {
 	case <-started:
-	case err := <-serverErr:
-		require.NoError(t, err, "start test DNS server")
+	case err := <-errCh:
+		require.NoError(t, err)
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out starting test DNS server")
+		t.Fatal("timed out starting DNS server")
 	}
-
-	addr := srv.PacketConnAddr().String()
-	t.Cleanup(func() { srv.Shutdown() })
-
-	return srv, addr
+	t.Cleanup(func() { require.NoError(t, srv.Shutdown()) })
+	return srv, srv.PacketConnAddr().String(), state
 }
 
-// query sends a DNS query and returns the response.
-func query(t *testing.T, addr string, name string, qtype uint16) *dns.Msg {
+func query(t *testing.T, addr, name string, qtype uint16) *dns.Msg {
 	t.Helper()
-
-	c := new(dns.Client)
-	m := new(dns.Msg)
-	m.SetQuestion(dns.Fqdn(name), qtype)
-
-	r, _, err := c.Exchange(m, addr)
+	request := new(dns.Msg)
+	request.SetQuestion(dns.Fqdn(name), qtype)
+	response, _, err := new(dns.Client).Exchange(request, addr)
 	require.NoError(t, err)
-	return r
+	return response
 }
 
-func TestDNS_A_PrivateIP(t *testing.T) {
-	_, addr := startTestServer(t)
-
-	r := query(t, addr, "192-168-1-50.lancert.dev.", dns.TypeA)
-	require.Len(t, r.Answer, 1)
-
-	a, ok := r.Answer[0].(*dns.A)
-	require.True(t, ok)
-	assert.Equal(t, "192.168.1.50", a.A.String())
+func TestRejectsMultipleQuestions(t *testing.T) {
+	_, addr, _ := startTestServer(t, nil)
+	request := new(dns.Msg)
+	request.Question = []dns.Question{
+		{Name: testZone, Qtype: dns.TypeSOA, Qclass: dns.ClassINET},
+		{Name: testHostname + "." + testZone, Qtype: dns.TypeA, Qclass: dns.ClassINET},
+	}
+	response, _, err := new(dns.Client).Exchange(request, addr)
+	require.NoError(t, err)
+	assert.Equal(t, dns.RcodeFormatError, response.Rcode)
+	assert.Empty(t, response.Answer)
 }
 
-func TestDNS_RecorderTracksTargetQuestionsAndMessages(t *testing.T) {
+func TestRegisteredAOwners(t *testing.T) {
+	_, addr, _ := startTestServer(t, nil)
+	for _, name := range []string{
+		testHostname + ".lancert.dev.",
+		"app." + testHostname + ".lancert.dev.",
+		"APP." + strings.ToUpper(testHostname) + ".LANCERT.DEV.",
+	} {
+		response := query(t, addr, name, dns.TypeA)
+		require.Len(t, response.Answer, 1)
+		record, ok := response.Answer[0].(*dns.A)
+		require.True(t, ok)
+		assert.Equal(t, "192.168.1.50", record.A.String())
+		assert.Equal(t, uint32(300), record.Hdr.Ttl)
+	}
+}
+
+func TestRegistrationOwnerBoundaries(t *testing.T) {
+	_, addr, _ := startTestServer(t, nil)
+
+	challengeA := query(t, addr, "_acme-challenge."+testHostname+".lancert.dev.", dns.TypeA)
+	assert.Equal(t, dns.RcodeSuccess, challengeA.Rcode)
+	assert.Empty(t, challengeA.Answer)
+	require.Len(t, challengeA.Ns, 1)
+
+	for _, name := range []string{
+		"foo.bar." + testHostname + ".lancert.dev.",
+		"unknownunknownunknown2.lancert.dev.",
+		"192-168-1-50.lancert.dev.",
+	} {
+		response := query(t, addr, name, dns.TypeA)
+		assert.Equal(t, dns.RcodeNameError, response.Rcode)
+		assert.Empty(t, response.Answer)
+		require.Len(t, response.Ns, 1)
+		soa, ok := response.Ns[0].(*dns.SOA)
+		require.True(t, ok)
+		assert.Equal(t, uint32(5), soa.Minttl)
+	}
+}
+
+func TestChallengeTXTTwoSlotsAndNODATA(t *testing.T) {
+	_, addr, state := startTestServer(t, nil)
+	name := "_AcMe-ChAlLeNgE." + strings.ToUpper(testHostname) + ".LaNcErT.DeV."
+	response := query(t, addr, name, dns.TypeTXT)
+	require.Len(t, response.Answer, 2)
+	var values []string
+	for _, answer := range response.Answer {
+		record, ok := answer.(*dns.TXT)
+		require.True(t, ok)
+		assert.Equal(t, uint32(1), record.Hdr.Ttl)
+		values = append(values, strings.Join(record.Txt, ""))
+	}
+	assert.ElementsMatch(t, []string{
+		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+	}, values)
+
+	state.mu.Lock()
+	r := state.records[testHostname]
+	r.Challenges = [2]string{}
+	state.records[testHostname] = r
+	state.mu.Unlock()
+	response = query(t, addr, name, dns.TypeTXT)
+	assert.Equal(t, dns.RcodeSuccess, response.Rcode)
+	assert.Empty(t, response.Answer)
+	require.Len(t, response.Ns, 1)
+}
+
+func TestDisabledOrRemovedRegistrationIsUnavailable(t *testing.T) {
+	_, addr, state := startTestServer(t, nil)
+	state.mu.Lock()
+	delete(state.records, testHostname)
+	state.mu.Unlock()
+
+	for _, test := range []struct {
+		name  string
+		qtype uint16
+	}{
+		{testHostname + ".lancert.dev.", dns.TypeA},
+		{"app." + testHostname + ".lancert.dev.", dns.TypeA},
+		{"_acme-challenge." + testHostname + ".lancert.dev.", dns.TypeTXT},
+	} {
+		response := query(t, addr, test.name, test.qtype)
+		assert.Equal(t, dns.RcodeNameError, response.Rcode)
+	}
+}
+
+func TestInfrastructureStaticAndNoCAA(t *testing.T) {
+	_, addr, _ := startTestServer(t, nil)
+
+	apex := query(t, addr, testZone, dns.TypeA)
+	require.Len(t, apex.Answer, 1)
+	assert.Equal(t, "5.9.100.1", apex.Answer[0].(*dns.A).A.String())
+
+	ns := query(t, addr, testZone, dns.TypeNS)
+	require.Len(t, ns.Answer, 2)
+	soa := query(t, addr, testZone, dns.TypeSOA)
+	require.Len(t, soa.Answer, 1)
+	static := query(t, addr, testZone, dns.TypeTXT)
+	require.Len(t, static.Answer, 1)
+	assert.Equal(t, uint32(600), static.Answer[0].Header().Ttl)
+
+	caa := query(t, addr, testZone, dns.TypeCAA)
+	assert.Equal(t, dns.RcodeSuccess, caa.Rcode)
+	assert.Empty(t, caa.Answer)
+	require.Len(t, caa.Ns, 1)
+}
+
+func TestRecorderTracksDNSAndRegistrationActivity(t *testing.T) {
 	recorder := &testRecorder{}
-	_, addr := startTestServer(t, recorder)
+	_, addr, _ := startTestServer(t, recorder)
+	query(t, addr, testHostname+".lancert.dev.", dns.TypeA)
+	query(t, addr, "unknownunknownunknown2.lancert.dev.", dns.TypeA)
+	query(t, addr, "_acme-challenge."+testHostname+".lancert.dev.", dns.TypeTXT)
 
-	query(t, addr, "192-168-1-50.lancert.dev.", dns.TypeA)
-	query(t, addr, "8-8-8-8.lancert.dev.", dns.TypeA)
-	query(t, addr, "_acme-challenge.192-168-1-50.lancert.dev.", dns.TypeTXT)
-
-	targets, responses, successes := recorder.snapshot()
-	require.Len(t, targets, 1)
-	assert.Equal(t, "192.168.1.50", targets[0].String())
-	assert.Equal(t, 3, responses)
-	assert.Equal(t, 3, successes)
-}
-
-func TestDNS_A_Subdomain(t *testing.T) {
-	_, addr := startTestServer(t)
-
-	// foo.192-168-1-50.lancert.dev should also resolve
-	r := query(t, addr, "foo.192-168-1-50.lancert.dev.", dns.TypeA)
-	require.Len(t, r.Answer, 1)
-
-	a, ok := r.Answer[0].(*dns.A)
-	require.True(t, ok)
-	assert.Equal(t, "192.168.1.50", a.A.String())
-}
-
-func TestDNS_A_ZoneApex(t *testing.T) {
-	_, addr := startTestServer(t)
-
-	r := query(t, addr, "lancert.dev.", dns.TypeA)
-	require.Len(t, r.Answer, 1)
-
-	a, ok := r.Answer[0].(*dns.A)
-	require.True(t, ok)
-	assert.Equal(t, "5.9.100.1", a.A.String())
-}
-
-func TestDNS_A_PublicIP_NXDOMAIN(t *testing.T) {
-	_, addr := startTestServer(t)
-
-	r := query(t, addr, "8-8-8-8.lancert.dev.", dns.TypeA)
-	assert.Equal(t, dns.RcodeNameError, r.Rcode)
-	assert.Empty(t, r.Answer)
-}
-
-func TestDNS_TXT_ChallengeRecord(t *testing.T) {
-	srv, addr := startTestServer(t)
-	ctx := context.Background()
-
-	fqdn := "_acme-challenge.192-168-1-50.lancert.dev."
-
-	// Add two challenge values (bare + wildcard)
-	cleanup1, err := srv.txtStore.SetTXTWithCleanup(ctx, fqdn, "token-bare", 120*time.Second)
-	require.NoError(t, err)
-	cleanup2, err := srv.txtStore.SetTXTWithCleanup(ctx, fqdn, "token-wild", 120*time.Second)
-	require.NoError(t, err)
-
-	r := query(t, addr, fqdn, dns.TypeTXT)
-	require.Len(t, r.Answer, 2)
-
-	var values []string
-	for _, rr := range r.Answer {
-		txt, ok := rr.(*dns.TXT)
-		require.True(t, ok)
-		values = append(values, txt.Txt...)
-	}
-	assert.ElementsMatch(t, []string{"token-bare", "token-wild"}, values)
-
-	// Cleanup both
-	require.NoError(t, cleanup1(ctx))
-	require.NoError(t, cleanup2(ctx))
-
-	r = query(t, addr, fqdn, dns.TypeTXT)
-	assert.Empty(t, r.Answer)
-}
-
-func TestDNS_TXT_StaticRecords(t *testing.T) {
-	store := NewTXTStore()
-	cfg := Config{
-		Zone:       testZone,
-		NSRecords:  []string{"ns1.lancert.dev.", "ns2.lancert.dev."},
-		ServerIP:   netip.MustParseAddr("5.9.100.1"),
-		SOAMname:   "ns1.lancert.dev.",
-		SOARname:   "admin.lancert.dev.",
-		CAAIssuers: []string{"letsencrypt.org"},
-		StaticTXT: map[string]StaticTXTRecord{
-			testZone: {
-				TTL:    600,
-				Values: []string{"verification-a", "verification-b"},
-			},
-		},
-	}
-	srv := New(cfg, store)
-
-	mux := dns.NewServeMux()
-	mux.HandleFunc(cfg.Zone, srv.handleQuery)
-	srv.udp = &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: mux}
-	started := make(chan struct{})
-	srv.udp.NotifyStartedFunc = func() { close(started) }
-	go func() {
-		if err := srv.udp.ListenAndServe(); err != nil {
-			t.Logf("test dns server: %v", err)
-		}
-	}()
-	<-started
-	t.Cleanup(func() { srv.Shutdown() })
-
-	r := query(t, srv.PacketConnAddr().String(), testZone, dns.TypeTXT)
-	require.Len(t, r.Answer, 2)
-	var values []string
-	for _, answer := range r.Answer {
-		txt, ok := answer.(*dns.TXT)
-		require.True(t, ok)
-		assert.Equal(t, uint32(600), txt.Hdr.Ttl)
-		values = append(values, strings.Join(txt.Txt, ""))
-	}
-	assert.ElementsMatch(t, []string{"verification-a", "verification-b"}, values)
-
-	_, err := store.SetTXTWithCleanup(context.Background(), testZone, "dynamic-challenge", 0)
-	require.NoError(t, err)
-
-	r = query(t, srv.PacketConnAddr().String(), testZone, dns.TypeTXT)
-	require.Len(t, r.Answer, 3)
-	for _, answer := range r.Answer {
-		txt, ok := answer.(*dns.TXT)
-		require.True(t, ok)
-		assert.Zero(t, txt.Hdr.Ttl)
-	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	assert.Equal(t, []string{
+		"01900000-0000-7000-8000-000000000000",
+		"",
+		"01900000-0000-7000-8000-000000000000",
+	}, recorder.registrations)
+	assert.Equal(t, 3, recorder.responses)
 }
 
 func TestSplitTXTValue(t *testing.T) {
@@ -250,53 +238,13 @@ func TestSplitTXTValue(t *testing.T) {
 	assert.Equal(t, []string{strings.Repeat("a", 255), strings.Repeat("a", 45)}, splitTXTValue(value))
 }
 
-func TestDNS_SOA(t *testing.T) {
-	_, addr := startTestServer(t)
-
-	r := query(t, addr, "lancert.dev.", dns.TypeSOA)
-	require.Len(t, r.Answer, 1)
-
-	soa, ok := r.Answer[0].(*dns.SOA)
-	require.True(t, ok)
-	assert.Equal(t, "ns1.lancert.dev.", soa.Ns)
-}
-
-func TestDNS_NS(t *testing.T) {
-	_, addr := startTestServer(t)
-
-	r := query(t, addr, "lancert.dev.", dns.TypeNS)
-	require.Len(t, r.Answer, 2)
-}
-
-func TestDNS_CAA(t *testing.T) {
-	_, addr := startTestServer(t)
-
-	r := query(t, addr, "lancert.dev.", dns.TypeCAA)
-	require.Len(t, r.Answer, 1)
-
-	caa, ok := r.Answer[0].(*dns.CAA)
-	require.True(t, ok)
-	assert.Equal(t, "issue", caa.Tag)
-	assert.Equal(t, "letsencrypt.org", caa.Value)
-}
-
-func TestExtractIPLabel(t *testing.T) {
-	tests := []struct {
-		name string
-		fqdn string
-		want string
-	}{
-		{name: "bare", fqdn: "192-168-1-50.lancert.dev.", want: "192-168-1-50"},
-		{name: "sub", fqdn: "app.192-168-1-50.lancert.dev.", want: "192-168-1-50"},
-		{name: "deep sub", fqdn: "a.b.192-168-1-50.lancert.dev.", want: "192-168-1-50"},
-		{name: "challenge", fqdn: "_acme-challenge.192-168-1-50.lancert.dev.", want: "192-168-1-50"},
-		{name: "apex", fqdn: "lancert.dev.", want: ""},
-		{name: "other zone", fqdn: "example.com.", want: ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, extractIPLabel(tt.fqdn, testZone))
-		})
-	}
+func TestRelativeLabelsAndHostnameValidation(t *testing.T) {
+	labels, ok := relativeLabels(testHostname+".lancert.dev.", testZone)
+	assert.True(t, ok)
+	assert.Equal(t, []string{testHostname}, labels)
+	_, ok = relativeLabels("example.com.", testZone)
+	assert.False(t, ok)
+	assert.True(t, validHostname(testHostname))
+	assert.True(t, validHostname("quiet-otter-k7"))
+	assert.False(t, validHostname("Quiet-otter"))
 }

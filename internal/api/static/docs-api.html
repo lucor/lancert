@@ -1,26 +1,4 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="lancert API Reference — endpoints for requesting and retrieving TLS certificates for private IPs.">
-  <meta property="og:title" content="lancert — API Reference">
-  <meta property="og:description" content="Endpoints for requesting and retrieving TLS certificates for private IPs.">
-  <meta property="og:image" content="/assets/og-image-1200x630.png">
-  <meta property="og:image:width" content="1200">
-  <meta property="og:image:height" content="630">
-  <meta property="og:type" content="website">
-  <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="lancert — API Reference">
-  <meta name="twitter:description" content="Endpoints for requesting and retrieving TLS certificates for private IPs.">
-  <meta name="twitter:image" content="/assets/og-image-1200x630.png">
-  <meta name="theme-color" content="#FFFFFF">
-  <link rel="icon" href="/assets/favicon.ico" sizes="48x48">
-  <link rel="icon" href="/assets/favicon.svg" sizes="any" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
-  {{if .Analytics}}<script defer src="https://analytics.lucor.dev/script.js" data-website-id="1c9b0509-2f00-493b-bb0a-da02ffb6ff1d"></script>{{end}}
-  <title>lancert — API Reference</title>
-  <style>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="Lancert v2 API reference for hostname registration and scoped DNS-01 updates."><meta name="theme-color" content="#FFFFFF"><link rel="icon" href="/assets/favicon.ico" sizes="48x48"><link rel="icon" href="/assets/favicon.svg" sizes="any" type="image/svg+xml"><link rel="apple-touch-icon" href="/assets/apple-touch-icon.png"><title>lancert — API Reference</title><style>
     :root {
       --lan: #078DE5;
       --lan-soft: #E5F4FE;
@@ -110,14 +88,12 @@
       .nav-links { gap: 16px; flex-wrap: wrap; justify-content: center; }
       .nav-links a { font-size: 13px; }
     }
-  </style>
-</head>
-<body>
-  <nav class="nav">
+  </style></head><body><nav class="nav">
     <a href="/" class="logo" aria-label="lancert home"><img src="/assets/lancert-logo.svg" alt="lancert"></a>
     <div class="nav-links">
       <a href="/docs">Docs</a>
-      <a href="/docs/web-servers">Web Servers</a>
+      <a href="/docs/cli">CLI</a>
+      <a href="/docs/acme-clients">ACME Clients</a>
       <a href="/docs/api" class="active" aria-current="page">API Reference</a>
       <a href="/status">Status</a>
       <a class="gh-star" href="https://github.com/lucor/lancert">
@@ -125,25 +101,4 @@
         Star on GitHub
       </a>
     </div>
-  </nav>
-
-  <script id="api-reference" data-url="/openapi.yaml" data-configuration='{
-    "hideClientButton": true,
-    "agent": { "disabled": true},
-    "mcp" : {"disabled": true},
-    "hideDarkModeToggle": true,
-    "hideSearch": true,
-    "showDeveloperTools": "localhost",
-    "showToolbar": "localhost",
-    "defaultOpenFirstTag": true,
-    "hiddenClients": ["c", "clojure", "csharp", "dart", "fsharp", "go", "http", "java", "js", "kotlin", "node", "objc", "ocaml", "php", "powershell", "python", "r", "ruby", "rust", "shell/httpie", "shell/wget", "swift"]
-  }'></script>
-  <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.49.3"></script>
-  <noscript>
-    <p style="padding:48px 24px;font-family:ui-sans-serif,system-ui,sans-serif;color:#374151">
-      JavaScript is required to view the interactive API reference.
-      You can download the <a href="/openapi.yaml">OpenAPI spec</a> directly.
-    </p>
-  </noscript>
-</body>
-</html>
+  </nav><script id="api-reference" data-url="/openapi.yaml" data-configuration='{"hideClientButton":true,"agent":{"disabled":true},"mcp":{"disabled":true},"hideDarkModeToggle":true,"hideSearch":true,"defaultOpenFirstTag":true}'></script><script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.49.3"></script><noscript><p style="padding:48px 24px">JavaScript is required to view the interactive Lancert v2 API reference. Download the <a href="/openapi.yaml">OpenAPI spec</a>.</p></noscript></body></html>

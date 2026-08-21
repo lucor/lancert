@@ -1,708 +1,271 @@
 package api
 
 import (
-	"crypto/sha256"
-	"crypto/x509"
-	"embed"
-	"encoding/hex"
 	"encoding/json"
-	"encoding/pem"
-	"fmt"
-	"html/template"
-	"io/fs"
+	"errors"
+	"io"
 	"log/slog"
-	"net"
 	"net/http"
-	"net/netip"
-	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
-	"lucor.dev/lancert/internal/certservice"
-	"lucor.dev/lancert/internal/certstore"
-	"lucor.dev/lancert/internal/metrics"
-	"lucor.dev/lancert/internal/privateip"
+	"go.lucor.dev/lancert/internal/metrics"
+	"go.lucor.dev/lancert/internal/privateip"
+	"go.lucor.dev/lancert/internal/registration"
 )
 
-//go:embed static/index.html
-var indexHTML []byte
+const maxRequestBody = 1024
 
-//go:embed static/404.html
-var notFoundHTML []byte
+// CompatibilityVersion changes only when the public registration or update
+// contract becomes incompatible. It is independent from the server release.
+const CompatibilityVersion = "2"
 
-//go:embed static/notice.html
-var noticeHTML []byte
+const compatibilityHeader = "X-Lancert-API-Version"
 
-//go:embed static/docs.html
-var docsHTML []byte
-
-//go:embed static/docs-api.html
-var docsAPIHTML []byte
-
-//go:embed static/docs-web-servers.html
-var docsWebServersHTML []byte
-
-//go:embed static/status.html
-var statusHTML string
-
-//go:embed openapi.yaml
-var openapiYAML []byte
-
-//go:embed static/assets
-var assetsFS embed.FS
-
-var assetsHandler http.Handler
-
-// init parses the embedded status page template once at startup.
-func init() {
-	sub, err := fs.Sub(assetsFS, "static/assets")
-	if err != nil {
-		panic("assets: " + err.Error())
-	}
-	assetsHandler = http.StripPrefix("/assets", http.FileServer(http.FS(sub)))
-}
-
-// serveAssets serves embedded static files with explicit content types.
-func serveAssets(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/assets/" {
-		http.NotFound(w, r)
-		return
-	}
-	assetsHandler.ServeHTTP(w, r)
-}
-
-var statusTemplate = template.Must(template.New("status").Parse(statusHTML))
-var indexTemplate = template.Must(template.New("index").Parse(string(indexHTML)))
-var notFoundTemplate = template.Must(template.New("not-found").Parse(string(notFoundHTML)))
-var noticeTemplate = template.Must(template.New("notice").Parse(string(noticeHTML)))
-var docsTemplate = template.Must(template.New("docs").Parse(string(docsHTML)))
-var docsAPITemplate = template.Must(template.New("docs-api").Parse(string(docsAPIHTML)))
-var docsWebServersTemplate = template.Must(template.New("docs-web-servers").Parse(string(docsWebServersHTML)))
-
-type indexData struct {
-	Analytics bool
-	Suspended bool
-}
-
-// BuildInfo identifies the binary serving the status page.
+// BuildInfo identifies the running binary.
 type BuildInfo struct {
 	Version    string
 	CommitHash string
 }
 
-type pageData struct {
-	Analytics bool
-}
-
-// Handler serves the lancert.dev HTTP API.
+// Handler serves the Lancert registration and acme-dns update API.
 type Handler struct {
-	service                *certservice.Service
-	mux                    *http.ServeMux
-	snapshot               func() metrics.Snapshot
-	build                  BuildInfo
-	initialIssuanceLimiter *RateLimiter
+	store        *registration.Store
+	zone         string
+	snapshot     func() metrics.Snapshot
+	recorder     metrics.Recorder
+	build        BuildInfo
+	stateHealthy atomic.Bool
+	ready        atomic.Bool
+	shuttingDown atomic.Bool
+	mux          *http.ServeMux
 }
 
-// HandlerOption configures optional API behavior.
-type HandlerOption func(*Handler)
-
-// WithInitialIssuanceLimiter limits only cache misses that start new issuance.
-func WithInitialIssuanceLimiter(limiter *RateLimiter) HandlerOption {
-	return func(h *Handler) { h.initialIssuanceLimiter = limiter }
+// New creates an API handler.
+func New(store *registration.Store, zone string, snapshot func() metrics.Snapshot, recorder metrics.Recorder) *Handler {
+	return NewWithBuildInfo(store, zone, snapshot, recorder, BuildInfo{Version: "dev", CommitHash: "dev"})
 }
 
-// New creates an API handler wired to the certificate service and status
-// snapshot provider.
-func New(svc *certservice.Service, snapshot func() metrics.Snapshot, options ...HandlerOption) *Handler {
-	return NewWithBuildInfo(svc, snapshot, BuildInfo{Version: "dev", CommitHash: "dev"}, options...)
-}
-
-// NewWithBuildInfo creates an API handler with build metadata for the status page.
-func NewWithBuildInfo(svc *certservice.Service, snapshot func() metrics.Snapshot, build BuildInfo, options ...HandlerOption) *Handler {
+// NewWithBuildInfo creates an API handler with build metadata.
+func NewWithBuildInfo(store *registration.Store, zone string, snapshot func() metrics.Snapshot, recorder metrics.Recorder, build BuildInfo) *Handler {
 	provider := func() metrics.Snapshot { return metrics.UnavailableSnapshot(nil) }
 	if snapshot != nil {
 		provider = snapshot
 	}
+	if recorder == nil {
+		recorder = metrics.Disabled{}
+	}
 	h := &Handler{
-		service:  svc,
+		store:    store,
+		zone:     strings.TrimSuffix(strings.ToLower(zone), "."),
 		snapshot: provider,
+		recorder: recorder,
 		build:    build,
+		mux:      http.NewServeMux(),
 	}
-	for _, option := range options {
-		option(h)
-	}
-	h.mux = http.NewServeMux()
-	h.registerRoutes()
+	h.stateHealthy.Store(store != nil)
+	h.ready.Store(store != nil)
+	h.mux.HandleFunc("POST /register/{ip}", h.handleRegister)
+	h.mux.HandleFunc("POST /update", h.handleUpdate)
+	h.mux.HandleFunc("GET /health", h.handleHealth)
+	h.mux.HandleFunc("GET /status", h.handleStatusRoute)
+	h.mux.HandleFunc("GET /docs", serveHTML(docsHTML))
+	h.mux.HandleFunc("GET /docs/cli", serveHTML(docsCLIHTML))
+	h.mux.HandleFunc("GET /docs/acme-clients", serveHTML(docsWebServersHTML))
+	h.mux.HandleFunc("GET /docs/api", serveHTML(docsAPIHTML))
+	h.mux.HandleFunc("GET /openapi.yaml", handleOpenAPI)
+	h.mux.Handle("GET /assets/", http.HandlerFunc(serveAssets))
+	h.mux.HandleFunc("GET /{$}", serveHTML(indexHTML))
 	return h
 }
 
 // ServeHTTP implements http.Handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set(compatibilityHeader, CompatibilityVersion)
 	h.mux.ServeHTTP(w, r)
 }
 
-// registerRoutes sets up the API routes.
-func (h *Handler) registerRoutes() {
-	h.mux.Handle("POST /certs/{ip}",
-		GzipResponse(http.HandlerFunc(h.handleIssueCert)))
-	h.mux.Handle("GET /certs/{ip}",
-		GzipResponse(http.HandlerFunc(h.handleGetCert)))
-	h.mux.HandleFunc("GET /certs/{ip}/ttl", h.handleGetTTL)
-	// PEM downloads skip GzipResponse: files are small (~2-3KB) and
-	// compressing secret material adds unnecessary risk.
-	h.mux.HandleFunc("GET /certs/{ip}/fullchain.pem", h.handleGetFullChain)
-	h.mux.HandleFunc("GET /certs/{ip}/privkey.pem", h.handleGetPrivKey)
-	h.mux.HandleFunc("GET /status", h.handleStatus)
-	h.mux.HandleFunc("GET /health", h.handleHealth)
-	h.mux.HandleFunc("GET /notice", handleNotice)
-	h.mux.HandleFunc("GET /docs", h.handleDocs)
-	h.mux.HandleFunc("GET /docs/api", h.handleDocsAPI)
-	h.mux.HandleFunc("GET /docs/web-servers", h.handleDocsWebServers)
-	h.mux.HandleFunc("GET /openapi.yaml", handleOpenAPI)
-	h.mux.HandleFunc("GET /{$}", h.handleIndex)
-	h.mux.HandleFunc("GET /assets/", serveAssets)
-	h.mux.HandleFunc("GET /", handleNotFound)
+// PrepareStartup keeps readiness false until every public listener is ready.
+func (h *Handler) PrepareStartup() {
+	h.ready.Store(false)
 }
 
-// handleIssueCert triggers certificate issuance for the given IP and returns
-// immediately. Returns 200 if a usable cert is already cached, or 202 with
-// Retry-After to indicate issuance is in progress.
-func (h *Handler) handleIssueCert(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1024)
+// MarkReady enables readiness after every public listener is available.
+func (h *Handler) MarkReady() {
+	if !h.shuttingDown.Load() && h.stateHealthy.Load() {
+		h.ready.Store(true)
+	}
+}
 
+// BeginShutdown makes readiness fail permanently before listener shutdown starts.
+func (h *Handler) BeginShutdown() {
+	h.shuttingDown.Store(true)
+	h.ready.Store(false)
+}
+
+type registrationResponse struct {
+	Hostname   string `json:"hostname"`
+	Username   string `json:"username"`
+	Password   string `json:"password"`
+	Subdomain  string `json:"subdomain"`
+	FullDomain string `json:"fulldomain"`
+}
+
+func (h *Handler) handleRegister(w http.ResponseWriter, r *http.Request) {
+	if !emptyBody(w, r) {
+		writeError(w, http.StatusBadRequest, "bad_request")
+		return
+	}
 	addr, err := privateip.ValidateRFC1918(r.PathValue("ip"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, http.StatusBadRequest, "bad_ip")
 		return
 	}
-
-	// Fast path: usable cert already on disk.
-	bundle, err := h.service.LoadUsable(addr)
+	credentials, err := h.store.Register(r.Context(), addr)
 	if err != nil {
-		slog.Error("api: load cert error", "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to read certificate")
+		if errors.Is(err, registration.ErrInvalidAddress) {
+			writeError(w, http.StatusBadRequest, "bad_ip")
+			return
+		}
+		if r.Context().Err() == nil {
+			h.stateHealthy.Store(false)
+		}
+		slog.Error("registration failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "db_error")
 		return
 	}
-	if bundle != nil {
-		writeCertificateJSON(w, r, addr, bundle)
-		return
-	}
-
-	// Trigger background issuance (idempotent). Admission is checked inside the
-	// service only after it knows this request will start new work.
-	var retryAfter time.Duration
-	status := h.service.TriggerIssuanceIf(addr, func() bool {
-		if h.initialIssuanceLimiter == nil {
-			return true
-		}
-		key, ok := IssuanceClientKeyFromContext(r.Context())
-		if !ok {
-			return false
-		}
-		allowed, retry := h.initialIssuanceLimiter.AllowWithRetry(key)
-		retryAfter = retry
-		return allowed
+	h.stateHealthy.Store(true)
+	writeJSON(w, http.StatusCreated, registrationResponse{
+		Hostname:   credentials.Hostname + "." + h.zone,
+		Username:   credentials.Username,
+		Password:   credentials.Password,
+		Subdomain:  credentials.Hostname,
+		FullDomain: "_acme-challenge." + credentials.Hostname + "." + h.zone,
 	})
+}
 
-	if status.RateLimited {
-		if _, ok := IssuanceClientKeyFromContext(r.Context()); !ok {
-			slog.Error("initial issuance limiter: missing client key")
-			writeError(w, http.StatusInternalServerError, "internal server error")
-			return
+type updateRequest struct {
+	Subdomain string `json:"subdomain"`
+	TXT       string `json:"txt"`
+}
+
+func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
+	username := r.Header.Get("X-Api-User")
+	key := r.Header.Get("X-Api-Key")
+	if len(username) == 0 || len(username) > 128 || len(key) == 0 || len(key) > 128 {
+		writeError(w, http.StatusUnauthorized, "forbidden")
+		return
+	}
+	var request updateRequest
+	if err := decodeJSON(w, r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request")
+		return
+	}
+	registrationID, err := h.store.UpdateChallenge(r.Context(), username, key, request.Subdomain, request.TXT)
+	switch {
+	case err == nil:
+		h.stateHealthy.Store(true)
+		h.recorder.RecordChallengeUpdate(registrationID)
+		writeJSON(w, http.StatusOK, map[string]string{"txt": request.TXT})
+	case errors.Is(err, registration.ErrForbidden):
+		writeError(w, http.StatusUnauthorized, "forbidden")
+	case errors.Is(err, registration.ErrInvalidChallenge):
+		writeError(w, http.StatusBadRequest, "bad_txt")
+	default:
+		if r.Context().Err() == nil {
+			h.stateHealthy.Store(false)
 		}
-		writeErrorRetry(w, http.StatusTooManyRequests, "initial certificate issuance rate limit exceeded, try again later", retryAfter)
-		return
-	}
-
-	if status.Fail != nil {
-		writeErrorRetry(w, status.Fail.Status, status.Fail.Msg, status.Fail.RetryAfter)
-		return
-	}
-
-	// Pending (newly triggered or already in progress).
-	writePending(w, pendingRetryAfter)
-}
-
-// handleGetCert returns the certificate status for the given IP.
-// 200 with cert JSON if usable, 202 if pending, 404 if never requested,
-// or the cached failure status code on recent errors.
-func (h *Handler) handleGetCert(w http.ResponseWriter, r *http.Request) {
-	addr, err := privateip.ValidateRFC1918(r.PathValue("ip"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	status, err := h.service.GetStatus(addr)
-	if err != nil {
-		slog.Error("api: get cert error", "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to read certificate")
-		return
-	}
-
-	if status.Bundle != nil {
-		writeCertificateJSON(w, r, addr, status.Bundle)
-		return
-	}
-
-	if status.Pending {
-		writePending(w, pendingRetryAfter)
-		return
-	}
-
-	if status.Fail != nil {
-		writeErrorRetry(w, status.Fail.Status, status.Fail.Msg, status.Fail.RetryAfter)
-		return
-	}
-
-	writeError(w, http.StatusNotFound, "no certificate found for this IP")
-}
-
-// handleGetTTL returns the remaining TTL in seconds as plain text.
-func (h *Handler) handleGetTTL(w http.ResponseWriter, r *http.Request) {
-	addr, err := privateip.ValidateRFC1918(r.PathValue("ip"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	ttl, err := h.service.TTL(addr)
-	if err != nil {
-		slog.Error("api: get certificate TTL error", "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to read certificate")
-		return
-	}
-	if ttl == 0 {
-		writeError(w, http.StatusNotFound, "no certificate found for this IP")
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprint(w, int(ttl.Seconds()))
-}
-
-const (
-	// pendingRetryAfter is the Retry-After value (in seconds) sent with
-	// 202 responses to tell clients how long to wait before polling again.
-	pendingRetryAfter = 10
-
-	pemFullChain = "fullchain"
-	pemPrivKey   = "privkey"
-)
-
-// handleGetFullChain returns the certificate chain as a PEM file download.
-func (h *Handler) handleGetFullChain(w http.ResponseWriter, r *http.Request) {
-	h.servePEM(w, r, pemFullChain)
-}
-
-// handleGetPrivKey returns the private key as a PEM file download.
-func (h *Handler) handleGetPrivKey(w http.ResponseWriter, r *http.Request) {
-	h.servePEM(w, r, pemPrivKey)
-}
-
-// servePEM validates the IP, resolves cert status, and writes the selected
-// PEM data as a file download. Error/status behavior mirrors handleGetCert.
-func (h *Handler) servePEM(w http.ResponseWriter, r *http.Request, kind string) {
-	addr, err := privateip.ValidateRFC1918(r.PathValue("ip"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	status, err := h.service.GetStatus(addr)
-	if err != nil {
-		slog.Error("api: get cert error", "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to read certificate")
-		return
-	}
-
-	if status.Bundle != nil {
-		if certificateNotModified(w, r, status.Bundle) {
-			return
-		}
-		var contentType string
-		var data []byte
-		if kind == pemFullChain {
-			contentType = "application/pem-certificate-chain"
-			data = status.Bundle.FullChainPEM
-		} else {
-			// application/octet-stream: no standard MIME type exists for
-			// PEM-encoded private keys; octet-stream triggers a download
-			// in browsers rather than rendering.
-			contentType = "application/octet-stream"
-			data = status.Bundle.PrivKeyPEM
-		}
-
-		w.Header().Set("Content-Type", contentType)
-		// Include IP in filename so downloading certs for multiple IPs
-		// does not overwrite previous files.
-		w.Header().Set("Content-Disposition",
-			fmt.Sprintf(`attachment; filename="%s-%s.pem"`, kind, addr.String()))
-		w.Write(data)
-		return
-	}
-
-	if status.Pending {
-		writePending(w, pendingRetryAfter)
-		return
-	}
-
-	if status.Fail != nil {
-		writeErrorRetry(w, status.Fail.Status, status.Fail.Msg, status.Fail.RetryAfter)
-		return
-	}
-
-	writeError(w, http.StatusNotFound, "no certificate found for this IP")
-}
-
-// certificateETag returns a strong digest of the leaf certificate.
-func certificateETag(bundle *certstore.CertBundle) string {
-	block, _ := pem.Decode(bundle.FullChainPEM)
-	if block == nil {
-		return ""
-	}
-	if _, err := x509.ParseCertificate(block.Bytes); err != nil {
-		return ""
-	}
-	sum := sha256.Sum256(block.Bytes)
-	return `"sha256-` + hex.EncodeToString(sum[:]) + `"`
-}
-
-// certificateNotModified handles If-None-Match for a certificate response.
-func certificateNotModified(w http.ResponseWriter, r *http.Request, bundle *certstore.CertBundle) bool {
-	etag := certificateETag(bundle)
-	if etag == "" {
-		return false
-	}
-	w.Header().Set("ETag", etag)
-	for _, candidate := range strings.Split(r.Header.Get("If-None-Match"), ",") {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "*" || candidate == etag || strings.TrimPrefix(candidate, "W/") == etag {
-			w.WriteHeader(http.StatusNotModified)
-			return true
-		}
-	}
-	return false
-}
-
-// writeCertificateJSON writes a cache-aware certificate response.
-func writeCertificateJSON(w http.ResponseWriter, r *http.Request, addr netip.Addr, bundle *certstore.CertBundle) {
-	if certificateNotModified(w, r, bundle) {
-		return
-	}
-	writeJSON(w, http.StatusOK, certResponse(addr, bundle))
-}
-
-type statusPageData struct {
-	metrics.Snapshot
-	Analytics                 bool
-	Suspended                 bool
-	Version                   string
-	CommitHash                string
-	SuccessPercent            string
-	RecentLookups             string
-	RecentPeriod              string
-	ResponseP95               string
-	LastUpdated               string
-	CertificatesCached        string
-	InitialCertificatesIssued string
-	CertificatesRenewed       string
-	ARIAdoption               string
-	ARIRenewalSummary         string
-	ARIAdoptionDetail         string
-	HasARIActivity            bool
-	ARIRenewalCount           uint64
-	RenewalCount              uint64
-	ServingCertificatesSince  string
-	LookupChart               []lookupChartBar
-	ChartStart                string
-	ChartEnd                  string
-	ChartMax                  uint64
-	HasLookupData             bool
-	AddressBlockChart         []addressBlockBar
-}
-
-type lookupChartBar struct {
-	Height  int
-	Label   string
-	Queries uint64
-}
-
-type addressBlockBar struct {
-	Name       string
-	Queries    uint64
-	Percentage string
-	Width      int
-}
-
-// handleStatus renders the public aggregate service status page.
-func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
-	s := h.snapshot()
-	data := statusPageData{
-		Snapshot:                  s,
-		Analytics:                 analyticsHost(r.Host),
-		Suspended:                 h.service.Suspended(),
-		Version:                   h.build.Version,
-		CommitHash:                h.build.CommitHash,
-		SuccessPercent:            "Not available",
-		RecentLookups:             strconv.FormatUint(s.RecentQueries, 10),
-		RecentPeriod:              "Last 5 minutes",
-		ResponseP95:               "Not available",
-		LastUpdated:               "Not available",
-		CertificatesCached:        "Unavailable",
-		InitialCertificatesIssued: "Unavailable",
-		CertificatesRenewed:       "Unavailable",
-		ARIAdoption:               "Unavailable",
-		ARIAdoptionDetail:         "Certificate metrics unavailable",
-	}
-	data.LookupChart, data.ChartStart, data.ChartEnd, data.ChartMax, data.HasLookupData = buildLookupChart(s.DailyLookups)
-	data.AddressBlockChart = buildAddressBlockChart(s.TopBlocks)
-	if !s.FreshAt.IsZero() {
-		data.LastUpdated = s.FreshAt.Format("2 Jan 2006, 15:04 UTC")
-	}
-	if s.WriteAttempts24H > 0 {
-		data.SuccessPercent = fmt.Sprintf("%.1f%%", float64(s.WriteSuccesses24H)*100/float64(s.WriteAttempts24H))
-	}
-	if s.Readiness.Available {
-		data.CertificatesCached = strconv.FormatUint(s.Readiness.Ready, 10)
-	}
-	if !s.Unavailable {
-		lifecycle := s.CertificateLifecycle
-		data.InitialCertificatesIssued = strconv.FormatUint(lifecycle.InitialIssuances, 10)
-		data.CertificatesRenewed = strconv.FormatUint(lifecycle.Renewals, 10)
-		data.ARIRenewalCount = lifecycle.ARIRenewals
-		data.RenewalCount = lifecycle.Renewals
-		if !lifecycle.RecordedSince.IsZero() {
-			data.ServingCertificatesSince = lifecycle.RecordedSince.Format("2 Jan 2006")
-		}
-		if lifecycle.HasARIAdoption {
-			data.ARIAdoption = fmt.Sprintf("%.1f%%", lifecycle.ARIAdoption)
-			data.ARIRenewalSummary = fmt.Sprintf("%d of %d renewals", lifecycle.ARIRenewals, lifecycle.Renewals)
-			data.ARIAdoptionDetail = "Renewals initiated using ACME Renewal Information."
-			data.HasARIActivity = true
-		} else {
-			data.ARIAdoption = "—"
-			data.ARIRenewalSummary = "Not available"
-			data.ARIAdoptionDetail = "No certificate renewals have been recorded yet."
-		}
-	}
-	if s.RecentWindow < 5*time.Minute {
-		data.RecentPeriod = "Since startup"
-	}
-	if s.ResponseP95 > 0 {
-		data.ResponseP95 = s.ResponseP95.String()
-		if s.ResponseP95Overflow {
-			data.ResponseP95 = ">" + data.ResponseP95
-		}
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "public, max-age=60, stale-while-revalidate=30")
-	if err := statusTemplate.Execute(w, data); err != nil {
-		slog.Error("status page: render failed", "error", err)
+		slog.Error("challenge update failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "db_error")
 	}
 }
 
-// buildAddressBlockChart adds relative widths and percentages to the three
-// RFC 1918 block aggregates used by the status page.
-func buildAddressBlockChart(blocks []metrics.Breakdown) []addressBlockBar {
-	var total uint64
-	for _, block := range blocks {
-		total += block.Queries
+func (h *Handler) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	if !h.operational() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "degraded"})
+		return
 	}
-	if total == 0 {
-		return nil
-	}
-	bars := make([]addressBlockBar, 0, len(blocks))
-	for _, block := range blocks {
-		percentage := float64(block.Queries) * 100 / float64(total)
-		width := int(percentage + 0.5)
-		if block.Queries > 0 {
-			width = max(width, 2)
-		}
-		bars = append(bars, addressBlockBar{
-			Name:       block.Name,
-			Queries:    block.Queries,
-			Percentage: fmt.Sprintf("%.1f%%", percentage),
-			Width:      width,
-		})
-	}
-	return bars
-}
-
-// buildLookupChart converts daily lookup totals into status-page chart bars.
-func buildLookupChart(days []metrics.DailyLookup) ([]lookupChartBar, string, string, uint64, bool) {
-	if len(days) == 0 {
-		return nil, "", "", 0, false
-	}
-	var maxQueries uint64
-	for _, day := range days {
-		maxQueries = max(maxQueries, day.Queries)
-	}
-	bars := make([]lookupChartBar, 0, len(days))
-	for _, day := range days {
-		height := 0
-		if day.Queries > 0 {
-			height = max(2, int(day.Queries*94/maxQueries))
-		}
-		bars = append(bars, lookupChartBar{
-			Height:  height,
-			Label:   chartDateLabel(day.Date),
-			Queries: day.Queries,
-		})
-	}
-	return bars, chartDateLabel(days[0].Date), chartDateLabel(days[len(days)-1].Date), maxQueries, maxQueries > 0
-}
-
-// chartDateLabel formats an ISO date for the compact chart axis.
-func chartDateLabel(date string) string {
-	t, err := time.Parse(time.DateOnly, date)
-	if err != nil {
-		return date
-	}
-	return t.Format("2 Jan")
-}
-
-// handleHealth is a simple liveness probe.
-func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// handleIndex serves the static homepage.
-func (h *Handler) handleIndex(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Vary", "Host")
-	data := indexData{Analytics: analyticsHost(r.Host), Suspended: h.service.Suspended()}
-	if err := indexTemplate.Execute(w, data); err != nil {
-		slog.Error("index page: render failed", "error", err)
-	}
+type statusResponse struct {
+	Status     string        `json:"status"`
+	Version    string        `json:"version"`
+	Commit     string        `json:"commit"`
+	APIVersion string        `json:"api_version"`
+	Metrics    statusMetrics `json:"metrics"`
 }
 
-// handleNotice serves the temporary certificate-operations notice.
-func handleNotice(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := noticeTemplate.Execute(w, pageData{Analytics: analyticsHost(r.Host)}); err != nil {
-		slog.Error("notice page: render failed", "error", err)
-	}
+type statusMetrics struct {
+	Available                  bool      `json:"available"`
+	Queries24H                 uint64    `json:"queries_24h"`
+	ACMEActiveRegistrations30D uint64    `json:"acme_active_registrations_30d"`
+	ResponseP95MS              float64   `json:"response_p95_ms"`
+	UpdatedAt                  time.Time `json:"updated_at,omitempty"`
 }
 
-// analyticsHost reports whether hostport is the public analytics hostname.
-func analyticsHost(hostport string) bool {
-	host := hostport
-	if parsed, _, err := net.SplitHostPort(hostport); err == nil {
-		host = parsed
+func (h *Handler) handleStatus(w http.ResponseWriter, _ *http.Request) {
+	snapshot := h.snapshot()
+	status := "operational"
+	if !h.operational() || snapshot.Unavailable || snapshot.Degraded {
+		status = "degraded"
 	}
-	host = strings.TrimSuffix(strings.ToLower(host), ".")
-	return host == "lancert.dev"
-}
-
-func (h *Handler) redirectSuspendedDocs(w http.ResponseWriter, r *http.Request) bool {
-	if !h.service.Suspended() {
-		return false
-	}
-	http.Redirect(w, r, "/notice", http.StatusTemporaryRedirect)
-	return true
-}
-
-// handleDocs serves the documentation landing page.
-func (h *Handler) handleDocs(w http.ResponseWriter, r *http.Request) {
-	if h.redirectSuspendedDocs(w, r) {
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := docsTemplate.Execute(w, pageData{Analytics: analyticsHost(r.Host)}); err != nil {
-		slog.Error("docs page: render failed", "error", err)
-	}
-}
-
-// handleDocsAPI serves the Scalar API reference page.
-func (h *Handler) handleDocsAPI(w http.ResponseWriter, r *http.Request) {
-	if h.redirectSuspendedDocs(w, r) {
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := docsAPITemplate.Execute(w, pageData{Analytics: analyticsHost(r.Host)}); err != nil {
-		slog.Error("api docs page: render failed", "error", err)
-	}
-}
-
-// handleDocsWebServers serves the web server integration guide page.
-func (h *Handler) handleDocsWebServers(w http.ResponseWriter, r *http.Request) {
-	if h.redirectSuspendedDocs(w, r) {
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := docsWebServersTemplate.Execute(w, pageData{Analytics: analyticsHost(r.Host)}); err != nil {
-		slog.Error("web server docs page: render failed", "error", err)
-	}
-}
-
-// handleOpenAPI serves the OpenAPI specification.
-func handleOpenAPI(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
-	w.Write(openapiYAML)
-}
-
-// handleNotFound serves a styled 404 page for unknown paths.
-func handleNotFound(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusNotFound)
-	if err := notFoundTemplate.Execute(w, pageData{Analytics: analyticsHost(r.Host)}); err != nil {
-		slog.Error("not-found page: render failed", "error", err)
-	}
-}
-
-// CertJSON is the JSON response for a certificate.
-type CertJSON struct {
-	IP        string   `json:"ip"`
-	Domains   []string `json:"domains"`
-	NotAfter  string   `json:"not_after"`
-	PrivKey   string   `json:"privkey_pem"`
-	FullChain string   `json:"fullchain_pem"`
-}
-
-// certResponse converts a CertBundle to the API response.
-func certResponse(addr netip.Addr, b *certstore.CertBundle) CertJSON {
-	return CertJSON{
-		IP:        addr.String(),
-		Domains:   b.Meta.Domains,
-		NotAfter:  b.Meta.NotAfter.Format(time.RFC3339),
-		PrivKey:   string(b.PrivKeyPEM),
-		FullChain: string(b.FullChainPEM),
-	}
-}
-
-// writeJSON writes a JSON response.
-func writeJSON(w http.ResponseWriter, status int, data any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(data); err != nil {
-		slog.Error("http: json encode error", "error", err)
-	}
-}
-
-// writePending writes a 202 Accepted response with Retry-After header
-// and a JSON body indicating the request is pending.
-func writePending(w http.ResponseWriter, retryAfter int) {
-	w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
-	writeJSON(w, http.StatusAccepted, map[string]any{
-		"status":      "pending",
-		"retry_after": retryAfter,
+	writeJSON(w, http.StatusOK, statusResponse{
+		Status:     status,
+		Version:    h.build.Version,
+		Commit:     h.build.CommitHash,
+		APIVersion: CompatibilityVersion,
+		Metrics: statusMetrics{
+			Available:                  !snapshot.Unavailable,
+			Queries24H:                 snapshot.Queries24H,
+			ACMEActiveRegistrations30D: snapshot.ACMEActiveRegistrations30D,
+			ResponseP95MS:              float64(snapshot.ResponseP95) / float64(time.Millisecond),
+			UpdatedAt:                  snapshot.FreshAt,
+		},
 	})
 }
 
-// writeError writes a JSON error response. For 5xx errors, sets
-// Retry-After: 3600 to signal clients to back off for one hour.
-func writeError(w http.ResponseWriter, status int, message string) {
-	writeErrorRetry(w, status, message, 0)
+func (h *Handler) handleStatusRoute(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("Vary", "Accept")
+	if strings.Contains(r.Header.Get("Accept"), "text/html") {
+		h.handleStatusPage(w, r)
+		return
+	}
+	h.handleStatus(w, r)
 }
 
-// writeErrorRetry writes an error response with an optional Retry-After header.
-func writeErrorRetry(w http.ResponseWriter, status int, message string, retryAfter time.Duration) {
-	seconds := int((retryAfter + time.Second - 1) / time.Second)
-	if seconds > 0 {
-		w.Header().Set("Retry-After", strconv.Itoa(seconds))
-	} else if status >= 500 {
-		w.Header().Set("Retry-After", "3600")
+func (h *Handler) operational() bool {
+	return h.ready.Load() && h.stateHealthy.Load() && !h.shuttingDown.Load()
+}
+
+func emptyBody(w http.ResponseWriter, r *http.Request) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, 1)
+	body, err := io.ReadAll(r.Body)
+	return err == nil && len(body) == 0
+}
+
+func decodeJSON(w http.ResponseWriter, r *http.Request, target any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
 	}
-	writeJSON(w, status, map[string]string{"error": message})
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("multiple JSON values")
+	}
+	return nil
+}
+
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		slog.Error("write JSON response", "error", err)
+	}
+}
+
+func writeError(w http.ResponseWriter, status int, code string) {
+	writeJSON(w, status, map[string]string{"error": code})
 }

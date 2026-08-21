@@ -1,26 +1,7 @@
 <!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>lancert — Local HTTPS Certificates for Private IP Addresses</title>
-  <meta name="description" content="Get Let's Encrypt wildcard TLS certificates for RFC 1918 private IP addresses. Build and test local HTTPS apps on your LAN without a custom CA or browser warnings.">
-  <meta property="og:title" content="lancert — Local HTTPS Certificates for Private IP Addresses">
-  <meta property="og:description" content="Get browser-trusted Let's Encrypt wildcard TLS certificates for private IP addresses on your LAN.">
-  <meta property="og:image" content="/assets/og-image-1200x630.png">
-  <meta property="og:image:width" content="1200">
-  <meta property="og:image:height" content="630">
-  <meta property="og:type" content="website">
-  <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="lancert — Local HTTPS Certificates for Private IP Addresses">
-  <meta name="twitter:description" content="Get browser-trusted Let's Encrypt wildcard TLS certificates for private IP addresses on your LAN.">
-  <meta name="twitter:image" content="/assets/og-image-1200x630.png">
-  <meta name="theme-color" content="#FFFFFF">
-  <link rel="icon" href="/assets/favicon.ico" sizes="48x48">
-  <link rel="icon" href="/assets/favicon.svg" sizes="any" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
-  {{if .Analytics}}<script defer src="https://analytics.lucor.dev/script.js" data-website-id="1c9b0509-2f00-493b-bb0a-da02ffb6ff1d"></script>{{end}}
-<style>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>lancert — Local HTTPS Certificates for Private IP Addresses</title><meta name="description" content="Get browser-trusted TLS certificates for private IP addresses on your LAN. Use the Lancert CLI or your preferred ACME client.">
+<meta name="theme-color" content="#FFFFFF"><link rel="icon" href="/assets/favicon.ico" sizes="48x48"><link rel="icon" href="/assets/favicon.svg" sizes="any" type="image/svg+xml"><link rel="apple-touch-icon" href="/assets/apple-touch-icon.png"><style>
   :root {
     --lan: #078DE5;
     --lan-soft: #E5F4FE;
@@ -230,7 +211,7 @@
   .t-json-brace { color: #8b949e; }
 
   .hero-terminal {
-    max-width: 600px;
+    max-width: 720px;
     margin: 48px auto 0;
   }
 
@@ -557,17 +538,13 @@
   .copy-btn:focus-visible {
     outline-color: #79b8c8;
   }
-</style>
-</head>
-<body>
-
+</style></head><body>
 <nav class="nav">
-    <a href="/" class="logo" aria-label="lancert home" aria-current="page"><img src="/assets/lancert-logo.svg" alt="lancert"></a>
+  <a href="/" class="logo" aria-label="lancert home" aria-current="page"><img src="/assets/lancert-logo.svg" alt="lancert"></a>
   <div class="nav-links">
     <a href="#why">Why local HTTPS</a>
     <a href="#how">How it works</a>
     <a href="#example">Example</a>
-    <a href="#security">Security</a>
     <a href="#faq">FAQ</a>
     <a href="/docs">Docs</a>
     <a href="/status">Status</a>
@@ -578,161 +555,132 @@
   </div>
 </nav>
 
-{{if .Suspended}}
-<aside class="suspension-banner" aria-label="Certificate operations notice">
-  <strong>Certificate service discontinued</strong>
-  Certificate issuance, renewal, and downloads have stopped. All unexpired certificates previously issued by Lancert were revoked on 30 July 2026. Existing DNS records remain operational.
-  <a href="/notice">Read the notice</a>.
-</aside>
-{{end}}
-
 <main>
 <header class="hero">
   <h1>Local HTTPS for private IP addresses.</h1>
-  <p class="subtitle">
-    Get browser-trusted Let’s Encrypt wildcard TLS certificates for private IP addresses on your LAN. Test local apps on real devices without a custom CA or certificate warnings.
-  </p>
+  <p class="subtitle">Get browser-trusted TLS certificates for apps on your LAN. No domain, local CA, or DNS setup required.</p>
 
   <div class="hero-terminal">
     <div class="terminal">
       <div class="terminal-bar">
         <i class="r" aria-hidden="true"></i><i class="y" aria-hidden="true"></i><i class="g" aria-hidden="true"></i>
-        <button type="button" class="copy-btn" data-copy="curl https://lancert.dev/certs/192.168.1.50"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25ZM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>Copy</button>
+        <button type="button" class="copy-btn" data-copy="lancert 192.168.1.50"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25ZM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>Copy</button>
       </div>
       <div class="terminal-body">
-        <span class="line"><span class="t-comment"># most common LAN IPs are pre-issued — just grab it</span></span>
-        <span class="line"><span class="t-ps">$ </span><span class="t-cmd">curl </span><span class="t-url">https://lancert.dev/certs/192.168.1.50</span></span>
-        <span class="line"><span class="t-json-brace">{</span></span>
-        <span class="line">  <span class="t-json-key">"ip"</span><span class="t-json-brace">: </span><span class="t-json-str">"192.168.1.50"</span><span class="t-json-brace">,</span></span>
-        <span class="line">  <span class="t-json-key">"domains"</span><span class="t-json-brace">: [</span><span class="t-json-str">"192-168-1-50.lancert.dev"</span><span class="t-json-brace">, </span><span class="t-json-str">"*.192-168-1-50.lancert.dev"</span><span class="t-json-brace">],</span></span>
-        <span class="line">  <span class="t-json-key">"not_after"</span><span class="t-json-brace">: </span><span class="t-json-str">"2026-06-21T07:44:41Z"</span><span class="t-json-brace">,</span></span>
-        <span class="line">  <span class="t-json-key">"privkey_pem"</span><span class="t-json-brace">: </span><span class="t-json-str">"-----BEGIN EC PRIVATE KEY-----..."</span><span class="t-json-brace">,</span></span>
-        <span class="line">  <span class="t-json-key">"fullchain_pem"</span><span class="t-json-brace">: </span><span class="t-json-str">"-----BEGIN CERTIFICATE-----..."</span></span>
-        <span class="line"><span class="t-json-brace">}</span></span>
+        <span class="line"><span class="t-comment"># get a certificate for your local app</span></span>
+        <span class="line"><span class="t-ps">$ </span><span class="t-cmd">lancert </span><span class="t-url">192.168.1.50</span></span>
+        <span class="line"><span class="t-ok">Certificate issued.</span></span>
+        <span class="line"><span class="t-res">Hostname: quiet-otter.lancert.dev</span></span>
+        <span class="line"><span class="t-res">Certificate: ~/.config/lancert/certs/quiet-otter.lancert.dev/fullchain.pem</span></span>
+        <span class="line"><span class="t-res">Private key: ~/.config/lancert/certs/quiet-otter.lancert.dev/privkey.pem</span></span>
         <div class="blank"></div>
         <span class="line"><span class="t-comment"># DNS already resolves to your LAN</span></span>
-        <span class="line"><span class="t-ps">$ </span><span class="t-cmd">dig </span><span class="t-dns">192-168-1-50.lancert.dev</span><span class="t-cmd"> +short</span></span>
+        <span class="line"><span class="t-ps">$ </span><span class="t-cmd">dig </span><span class="t-dns">quiet-otter.lancert.dev</span><span class="t-cmd"> +short</span></span>
         <span class="line"><span class="t-res">192.168.1.50</span></span>
         <div class="blank"></div>
         <span class="line"><span class="t-comment"># done — valid HTTPS on your private IP</span></span>
-        <span class="line"><span class="t-ps">$ </span><span class="t-cmd">curl </span><span class="t-url">https://192-168-1-50.lancert.dev</span></span>
-        <span class="line"><span class="t-ok">🔒 valid HTTPS</span></span>
+        <span class="line"><span class="t-ps">$ </span><span class="t-cmd">curl </span><span class="t-url">https://quiet-otter.lancert.dev</span></span>
+        <span class="line"><span class="t-ok">Hello from your local app!</span></span>
       </div>
     </div>
-    <p class="hero-note">Pre-issued certificates cover 24 common LAN IPs — gateways, Docker bridge, and typical static addresses.</p>
+    <p class="hero-note">The CLI uses Let’s Encrypt by default. Let’s Encrypt policies and rate limits apply.</p>
   </div>
 </header>
 
-<!-- CUSTOM IP -->
 <section class="custom-ip">
   <div class="custom-ip-box">
     <div class="custom-ip-header">
-      <h2>Need a different IP?</h2>
-      <p>If your IP isn't pre-issued, request a certificate on demand. Issuance takes a few seconds via Let's Encrypt DNS-01 challenge.</p>
+      <h2>Prefer your own ACME client?</h2>
+      <p>The Lancert CLI is the quickest option, but it is not required. Register your private IP, then use the returned credentials with Lego, Certbot, acme.sh, or another compatible client. <a href="/docs/acme-clients">See the setup guide</a>.</p>
     </div>
     <div class="terminal">
       <div class="terminal-bar">
         <i class="r" aria-hidden="true"></i><i class="y" aria-hidden="true"></i><i class="g" aria-hidden="true"></i>
-        <button type="button" class="copy-btn" data-copy="curl -X POST https://lancert.dev/certs/192.168.1.77"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25ZM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>Copy</button>
+        <button type="button" class="copy-btn" data-copy="curl --fail-with-body -X POST https://lancert.dev/register/192.168.1.50"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25ZM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>Copy</button>
       </div>
       <div class="terminal-body">
-        <span class="line"><span class="t-comment"># request a cert for any RFC 1918 IP</span></span>
-        <span class="line"><span class="t-ps">$ </span><span class="t-cmd">curl </span><span class="t-flag">-X POST </span><span class="t-url">https://lancert.dev/certs/192.168.1.77</span></span>
-        <span class="line"><span class="t-res">202 — issuance started</span></span>
-        <div class="blank"></div>
-        <span class="line"><span class="t-comment"># poll — ready in seconds</span></span>
-        <span class="line"><span class="t-ps">$ </span><span class="t-cmd">curl </span><span class="t-url">https://lancert.dev/certs/192.168.1.77</span></span>
-        <span class="line"><span class="t-ok">200 — certificate ready</span></span>
+        <span class="line"><span class="t-comment"># register a private IP</span></span>
+        <span class="line"><span class="t-ps">$ </span><span class="t-cmd">curl </span><span class="t-flag">--fail-with-body -X POST </span><span class="t-url">https://lancert.dev/register/192.168.1.50</span></span>
+        <span class="line"><span class="t-json-brace">{</span></span>
+        <span class="line">  <span class="t-json-key">"hostname"</span><span class="t-json-brace">: </span><span class="t-json-str">"quiet-otter.lancert.dev"</span><span class="t-json-brace">,</span></span>
+        <span class="line">  <span class="t-json-key">"username"</span><span class="t-json-brace">: </span><span class="t-json-str">"…"</span><span class="t-json-brace">,</span></span>
+        <span class="line">  <span class="t-json-key">"password"</span><span class="t-json-brace">: </span><span class="t-json-str">"save-this-one-time-secret"</span></span>
+        <span class="line"><span class="t-json-brace">}</span></span>
       </div>
     </div>
   </div>
 </section>
 
-<!-- WHY -->
 <section class="section" id="why">
   <h2>Why use lancert for local HTTPS?</h2>
   <div class="features">
     <div class="feat">
       <h3>Browser-trusted certificates</h3>
-      <p>Let’s Encrypt certificates that browsers already trust. No custom CA, device setup, or certificate warnings.</p>
+      <p>Certificates from a trusted certificate authority. No custom CA, device setup, or certificate warnings.</p>
     </div>
     <div class="feat">
       <h3>Test on real devices</h3>
       <p>Use service workers, push notifications, WebRTC, and other HTTPS-only APIs from devices on your LAN.</p>
     </div>
     <div class="feat">
-      <h3>No local CA setup</h3>
-      <p>No signup, API key, DNS setup, or certificate authority to install. Request a certificate when you need it.</p>
+      <h3>No domain or DNS setup</h3>
+      <p>Lancert provides the hostname and handles the DNS records required for validation.</p>
     </div>
     <div class="feat">
       <h3>Wildcard names included</h3>
-      <p>Each certificate covers the base domain and <code>*.192-168-1-50.lancert.dev</code>, so one certificate works across your local subdomains.</p>
+      <p>Each certificate covers the assigned hostname and its wildcard, so one certificate works across your local subdomains.</p>
     </div>
   </div>
 </section>
 
-<!-- SECURITY -->
-<section class="section" id="security">
-  <h2>Security</h2>
-  <div class="security-callout">
-    <h3>lancert does not provide confidentiality</h3>
-    <p>The private keys are served via API to anyone who requests them. There is no ownership concept for private IPs — <code>192.168.1.50</code> on your network is the same address as <code>192.168.1.50</code> on someone else's. Anyone who knows the IP can download the same certificate and private key.</p>
-    <p>The browser will show a valid HTTPS connection, but <strong>this does not mean the traffic is protected</strong> from other devices on the same network.</p>
-    <p>The threat model is simple: you trust your local network enough to develop on it, and you need the browser to trust your certificate. That's it. Do not use these certificates in production.</p>
-  </div>
-</section>
-
-<!-- HOW IT WORKS -->
 <section class="section" id="how">
   <h2>How local HTTPS works</h2>
   <div class="timeline">
     <div class="timeline-item">
       <div class="timeline-mid"><div class="timeline-dot"></div><div class="timeline-line"></div></div>
       <div class="timeline-content">
+        <h3>A hostname for your app</h3>
+        <p>The CLI registers your private IPv4 address and receives a random hostname under <code>lancert.dev</code>.</p>
+      </div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-mid"><div class="timeline-dot"></div><div class="timeline-line"></div></div>
+      <div class="timeline-content">
         <h3>Authoritative DNS</h3>
-        <p>lancert runs its own DNS server for the <code>lancert.dev</code> zone.</p>
+        <p>Lancert points the assigned hostname and its wildcard to your private IPv4 address.</p>
       </div>
     </div>
     <div class="timeline-item">
       <div class="timeline-mid"><div class="timeline-dot"></div><div class="timeline-line"></div></div>
       <div class="timeline-content">
-        <h3>IP in the name</h3>
-        <p>Subdomains like <code>192-168-1-50.lancert.dev</code> resolve to <code>192.168.1.50</code> by parsing the IP from the hostname.</p>
+        <h3>Standard DNS-01 challenge</h3>
+        <p>The CLI asks the certificate authority for a certificate and uses Lancert to publish the required DNS challenge record.</p>
       </div>
     </div>
     <div class="timeline-item">
       <div class="timeline-mid"><div class="timeline-dot"></div><div class="timeline-line"></div></div>
       <div class="timeline-content">
-        <h3>DNS-01 challenge</h3>
-        <p>POST triggers certificate issuance via Let's Encrypt DNS-01 challenge, fully automated and non-blocking.</p>
-      </div>
-    </div>
-    <div class="timeline-item">
-      <div class="timeline-mid"><div class="timeline-dot"></div><div class="timeline-line"></div></div>
-      <div class="timeline-content">
-        <h3>Wildcard cert</h3>
-        <p>Each IP gets a wildcard cert covering <code>*.192-168-1-50.lancert.dev</code>, cached and renewed automatically on next request before expiry.</p>
+        <h3>Local certificate and renewal</h3>
+        <p>The CLI saves the certificate and private key on your machine. Run <code>lancert renew</code> regularly to renew certificates when needed.</p>
       </div>
     </div>
   </div>
 </section>
 
-<!-- EXAMPLE: CADDY -->
 <section class="section" id="example">
   <h2>Example: Caddy</h2>
-  <p class="api-desc">Download the PEM files and use them with <a href="https://caddyserver.com">Caddy</a> to serve HTTPS on your LAN.</p>
+  <p class="api-desc">Get a certificate with the Lancert CLI and use the printed paths with <a href="https://caddyserver.com">Caddy</a>.</p>
 
   <div class="example-step">
-    <h3>1. Download the certificate files</h3>
+    <h3>1. Get the certificate</h3>
     <div class="terminal">
       <div class="terminal-bar">
         <i class="r" aria-hidden="true"></i><i class="y" aria-hidden="true"></i><i class="g" aria-hidden="true"></i>
-        <button type="button" class="copy-btn" data-copy="curl -o fullchain.pem https://lancert.dev/certs/192.168.1.50/fullchain.pem
-curl -o privkey.pem https://lancert.dev/certs/192.168.1.50/privkey.pem"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25ZM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>Copy</button>
+        <button type="button" class="copy-btn" data-copy="lancert 192.168.1.50"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25ZM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>Copy</button>
       </div>
       <div class="terminal-body">
-        <span class="line"><span class="t-ps">$ </span><span class="t-cmd">curl </span><span class="t-flag">-o </span><span class="t-cmd">fullchain.pem </span><span class="t-url">https://lancert.dev/certs/192.168.1.50/fullchain.pem</span></span>
-        <span class="line"><span class="t-ps">$ </span><span class="t-cmd">curl </span><span class="t-flag">-o </span><span class="t-cmd">privkey.pem </span><span class="t-url">https://lancert.dev/certs/192.168.1.50/privkey.pem</span></span>
+        <span class="line"><span class="t-ps">$ </span><span class="t-cmd">lancert </span><span class="t-url">192.168.1.50</span></span>
+        <span class="line"><span class="t-ok">Certificate issued.</span></span>
       </div>
     </div>
   </div>
@@ -742,15 +690,15 @@ curl -o privkey.pem https://lancert.dev/certs/192.168.1.50/privkey.pem"><svg ari
     <div class="terminal">
       <div class="terminal-bar">
         <i class="r" aria-hidden="true"></i><i class="y" aria-hidden="true"></i><i class="g" aria-hidden="true"></i>
-        <button type="button" class="copy-btn" data-copy="192-168-1-50.lancert.dev, hi.192-168-1-50.lancert.dev {
-    tls fullchain.pem privkey.pem
+        <button type="button" class="copy-btn" data-copy="quiet-otter.lancert.dev, hi.quiet-otter.lancert.dev {
+    tls /path/to/fullchain.pem /path/to/privkey.pem
     respond &quot;Hello from lancert!&quot;
 }"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25ZM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>Copy</button>
       </div>
       <div class="terminal-body">
-        <span class="line"><span class="t-comment"># wildcard cert covers any subdomain</span></span>
-        <span class="line"><span class="t-dns">192-168-1-50.lancert.dev</span><span class="t-json-brace">,</span> <span class="t-dns">hi.192-168-1-50.lancert.dev</span> <span class="t-json-brace">{</span></span>
-        <span class="line">    <span class="t-cmd">tls</span> <span class="t-json-str">fullchain.pem</span> <span class="t-json-str">privkey.pem</span></span>
+        <span class="line"><span class="t-comment"># wildcard certificate covers local subdomains</span></span>
+        <span class="line"><span class="t-dns">quiet-otter.lancert.dev</span><span class="t-json-brace">,</span> <span class="t-dns">hi.quiet-otter.lancert.dev</span> <span class="t-json-brace">{</span></span>
+        <span class="line">    <span class="t-cmd">tls</span> <span class="t-json-str">/path/to/fullchain.pem</span> <span class="t-json-str">/path/to/privkey.pem</span></span>
         <span class="line">    <span class="t-cmd">respond</span> <span class="t-json-str">"Hello from lancert!"</span></span>
         <span class="line"><span class="t-json-brace">}</span></span>
       </div>
@@ -768,60 +716,51 @@ curl -o privkey.pem https://lancert.dev/certs/192.168.1.50/privkey.pem"><svg ari
         <span class="line"><span class="t-ps">$ </span><span class="t-cmd">caddy run</span></span>
         <div class="blank"></div>
         <span class="line"><span class="t-comment"># from another terminal or any device on your network</span></span>
-        <span class="line"><span class="t-ps">$ </span><span class="t-cmd">curl </span><span class="t-url">https://192-168-1-50.lancert.dev</span></span>
+        <span class="line"><span class="t-ps">$ </span><span class="t-cmd">curl </span><span class="t-url">https://quiet-otter.lancert.dev</span></span>
         <span class="line"><span class="t-ok">Hello from lancert!</span></span>
-        <span class="line"><span class="t-ps">$ </span><span class="t-cmd">curl </span><span class="t-url">https://hi.192-168-1-50.lancert.dev</span></span>
+        <span class="line"><span class="t-ps">$ </span><span class="t-cmd">curl </span><span class="t-url">https://hi.quiet-otter.lancert.dev</span></span>
         <span class="line"><span class="t-ok">Hello from lancert!</span></span>
       </div>
     </div>
   </div>
 </section>
 
-<!-- FAQ -->
 <section class="section" id="faq">
   <h2>FAQ</h2>
   <div class="faq">
     <details>
-      <summary>Which IPs are pre-issued?</summary>
-      <p>Let's Encrypt enforces rate limits on certificate issuance. To stay within those limits, lancert pre-issues certificates for 24 common LAN addresses:</p>
-      <p>
-        <strong>Gateways &amp; vendor defaults</strong><br>
-        <code>192.168.0.1</code> <code>192.168.1.1</code> <code>10.0.0.1</code> <code>10.0.1.1</code> <code>172.17.0.1</code> <code>192.168.0.254</code> <code>192.168.1.254</code> <code>192.168.50.1</code> <code>192.168.88.1</code>
-      </p>
-      <p>
-        <strong>Common static/dev hosts</strong><br>
-        <code>192.168.0.2</code> <code>192.168.0.9</code> <code>192.168.0.10</code> <code>192.168.0.20</code> <code>192.168.0.50</code> <code>192.168.0.100</code>
-        <code>192.168.1.2</code> <code>192.168.1.10</code> <code>192.168.1.20</code> <code>192.168.1.50</code> <code>192.168.1.100</code>
-        <code>10.0.0.10</code> <code>10.0.0.50</code> <code>10.0.0.100</code> <code>10.0.1.10</code>
-      </p>
-    </details>
-    <details>
-      <summary>How long do certificates last?</summary>
-      <p>90 days, as issued by Let's Encrypt. Pre-issued certificates are renewed automatically. On-demand certificates are cached and renewed on next request before expiry, as long as the service is running.</p>
-    </details>
-    <details>
-      <summary>Can I request a new IP to be pre-issued?</summary>
-      <p>Yes — <a href="https://github.com/lucor/lancert/issues">open an issue</a> on the GitHub repository with the IP and use case.</p>
-    </details>
-    <details>
       <summary>Which IP ranges are supported?</summary>
-      <p>Any private IP in the RFC 1918 ranges: <code>10.0.0.0/8</code>, <code>172.16.0.0/12</code>, and <code>192.168.0.0/16</code>.</p>
+      <p>Private IPv4 addresses in <code>10.0.0.0/8</code>, <code>172.16.0.0/12</code>, and <code>192.168.0.0/16</code>.</p>
     </details>
     <details>
-      <summary>Is this safe to use?</summary>
-      <p>lancert is designed for local development only. The private keys are served via API to anyone who requests them — there is no ownership model for private IPs. The browser will show a valid HTTPS connection, but this does not mean the traffic is protected from other devices on the same network. See the <a href="#security">Security</a> section for details. Do not use these certificates in production.</p>
+      <summary>Do I need my own domain?</summary>
+      <p>No. Lancert assigns a hostname under <code>lancert.dev</code>. You can build the same standard DNS-01 flow with your own domain and DNS provider if you prefer.</p>
+    </details>
+    <details>
+      <summary>Do I have to use the Lancert CLI?</summary>
+      <p>No. You can use Lego, Certbot, acme.sh, or another client that supports an acme-dns-compatible API. This requires a few extra setup steps.</p>
+    </details>
+    <details>
+      <summary>Which certificate authority does the CLI use?</summary>
+      <p>The CLI uses Let’s Encrypt by default. Let’s Encrypt terms, policies, and rate limits apply. You can select another ACME-compatible certificate authority.</p>
+    </details>
+    <details>
+      <summary>Where are certificates and private keys stored?</summary>
+      <p>They stay on your machine in your platform’s user configuration directory. The CLI prints the exact paths after issuance, and the Lancert service never receives or stores them.</p>
+    </details>
+    <details>
+      <summary>What do I trust Lancert with?</summary>
+      <p>Lancert operates DNS for your assigned hostname and publishes its address and challenge records. As with any managed DNS service, you rely on Lancert to operate DNS for the hostname it provides.</p>
     </details>
   </div>
 </section>
 
-<!-- DONATE -->
 <div class="donate">
   <div class="donate-box">
-    <p>lancert is free and powered by Let's Encrypt. If you find it useful, consider supporting them.</p>
-    <a class="donate-link" href="https://letsencrypt.org/donate/">Donate to Let's Encrypt</a>
+    <p>Lancert is free and uses Let’s Encrypt by default. If you find it useful, consider supporting them.</p>
+    <a class="donate-link" href="https://letsencrypt.org/donate/">Donate to Let’s Encrypt</a>
   </div>
 </div>
-
 </main>
 
 <footer class="site-footer">
@@ -846,6 +785,4 @@ document.querySelectorAll('.copy-btn').forEach(function(btn) {
   });
 });
 </script>
-
-</body>
-</html>
+</body></html>

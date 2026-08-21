@@ -1,39 +1,4 @@
-// Package dnssrv implements an authoritative DNS server for the lancert.dev zone.
-//
-// # Why lancert runs its own DNS server
-//
-// ACME DNS-01 validation requires provisioning TXT records under
-// _acme-challenge.<domain> and having them visible to Let's Encrypt's resolvers.
-// The only way to do this without calling an external DNS API (Cloudflare,
-// Route53, etc.) is to be the authoritative nameserver for the zone yourself.
-// lancert owns the zone, so it can provision challenge records in-process with
-// zero external dependencies.
-//
-// # Record types served
-//
-//   - A: zone apex and NS glue records resolve to the server's public IP;
-//     subdomains resolve to the RFC 1918 IP encoded in the label
-//     (e.g. 192-168-1-50.lancert.dev. → 192.168.1.50).
-//   - TXT: serves declarative verification records and ACME DNS-01 challenge
-//     values. Static records use their configured TTL; challenge records use
-//     TTL 0 so LE must see the current value.
-//   - SOA, NS: required by the DNS protocol for an authoritative zone.
-//   - CAA: restricts certificate issuance to configured CAs (e.g. letsencrypt.org),
-//     preventing misissurance by other CAs even if they are publicly trusted.
-//
-// # Why UDP and TCP
-//
-// The DNS spec requires both transports. UDP handles the vast majority of
-// queries; TCP is used for responses that exceed the 512-byte UDP limit and
-// is required by some resolvers and the ACME spec.
-//
-// # Why ACME TXT records are in-memory
-//
-// Challenge records are ephemeral: they are created immediately before calling
-// Accept and removed as soon as validation completes (or fails). Persisting
-// them to disk would add latency and complexity with no benefit — they are
-// never needed across restarts. Static TXT records are instead reconstructed
-// from startup configuration.
+// Package dnssrv implements the authoritative DNS server for the Lancert zone.
 package dnssrv
 
 import (
@@ -46,112 +11,77 @@ import (
 
 	"github.com/miekg/dns"
 
-	"lucor.dev/lancert/internal/privateip"
+	"go.lucor.dev/lancert/internal/registration"
 )
 
-// soaMinTTL controls how long recursive resolvers cache negative responses
-// (NXDOMAIN / NODATA) per RFC 2308. Kept very low (5s) because the only
-// dynamic records in this zone are ephemeral ACME challenge TXT records:
-// a high value would cause resolvers to serve stale "no record" answers
-// for TXT records that were set moments ago.
-const soaMinTTL = 5
+const (
+	soaMinTTL       = 5
+	registrationTTL = 300
+	challengeTTL    = 1
+)
 
-// Config holds the DNS server configuration.
+// Config holds authoritative zone configuration.
 type Config struct {
-	// Zone is the authoritative zone with trailing dot, e.g. "lancert.dev."
-	Zone string
-
-	// NSRecords are the nameserver hostnames for NS responses, e.g.
-	// ["ns1.lancert.dev.", "ns2.lancert.dev."]
+	Zone      string
 	NSRecords []string
-
-	// ServerIP is the public IP of this server, used for NS A record
-	// glue responses.
-	ServerIP netip.Addr
-
-	// SOAMname is the primary nameserver for the SOA record.
-	SOAMname string
-
-	// SOARname is the admin email in DNS format (e.g. "admin.lancert.dev.").
-	SOARname string
-
-	// CAAIssuers is the list of CAs allowed to issue certs (e.g. ["letsencrypt.org"]).
-	CAAIssuers []string
-
-	// StaticTXT contains declarative TXT RRsets keyed by lowercase FQDN.
-	// These records are independent from ephemeral ACME challenge records.
+	ServerIP  netip.Addr
+	SOAMname  string
+	SOARname  string
 	StaticTXT map[string]StaticTXTRecord
-
-	// Recorder receives bounded aggregate observations. It must not perform
-	// blocking I/O on the DNS handler path.
-	Recorder Recorder
+	Recorder  Recorder
 }
 
-// StaticTXTRecord is a persistent-by-configuration TXT RRset. All values at
-// the same owner name share one TTL, as required for records in an RRset.
+// StaticTXTRecord is a configured TXT RRset.
 type StaticTXTRecord struct {
 	TTL    uint32
 	Values []string
 }
 
-// Recorder is implemented by the metrics collector. Keeping this interface
-// local avoids coupling the DNS package to a storage implementation.
+// Recorder receives aggregate observations and must not block. An empty
+// registration ID means the request did not resolve to a registration.
 type Recorder interface {
-	RecordTarget(netip.Addr)
+	RecordDNSQuery(registrationID string)
 	RecordResponse(bool, time.Duration)
 }
 
-// Server is an authoritative DNS server for the lancert.dev zone.
-// It resolves A records by parsing the IP from subdomain labels and
-// serves static TXT records and ACME challenges from separate sources.
+// RegistrationView is the committed in-memory state needed by DNS.
+type RegistrationView interface {
+	Lookup(hostname string) (registration.Registration, bool)
+}
+
+// Server serves authoritative UDP and TCP DNS from a registration snapshot.
 type Server struct {
 	config   Config
-	txtStore *TXTStore
+	state    RegistrationView
 	mux      *dns.ServeMux
 	udp      *dns.Server
 	tcp      *dns.Server
 	recorder Recorder
 }
 
-// New creates a DNS server with the given config and TXT store.
-func New(cfg Config, store *TXTStore) *Server {
-	s := &Server{
-		config:   cfg,
-		txtStore: store,
-		recorder: cfg.Recorder,
-	}
-
+// New creates a DNS server using state for dynamic A and TXT records.
+func New(cfg Config, state RegistrationView) *Server {
+	s := &Server{config: cfg, state: state, recorder: cfg.Recorder}
 	s.mux = dns.NewServeMux()
 	s.mux.HandleFunc(cfg.Zone, s.handleQuery)
-
 	return s
 }
 
-// ListenAndServe starts UDP and TCP listeners on the given address
-// (e.g. ":53"). If ready is non-nil it is called once both listeners
-// are bound and serving. Blocks until a listener error or Shutdown.
+// ListenAndServe starts UDP and TCP listeners. It calls ready after both bind.
 func (s *Server) ListenAndServe(addr string, ready func()) error {
 	s.udp = &dns.Server{Addr: addr, Net: "udp", Handler: s.mux}
 	s.tcp = &dns.Server{Addr: addr, Net: "tcp", Handler: s.mux}
 
 	errCh := make(chan error, 2)
-
-	// Track when both listeners are bound.
 	var wg sync.WaitGroup
 	wg.Add(2)
 	s.udp.NotifyStartedFunc = func() { wg.Done() }
 	s.tcp.NotifyStartedFunc = func() { wg.Done() }
-
 	go func() { errCh <- s.udp.ListenAndServe() }()
 	go func() { errCh <- s.tcp.ListenAndServe() }()
 
-	// Wait for both listeners to bind, or return early on error.
 	readyCh := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(readyCh)
-	}()
-
+	go func() { wg.Wait(); close(readyCh) }()
 	select {
 	case err := <-errCh:
 		return err
@@ -160,17 +90,14 @@ func (s *Server) ListenAndServe(addr string, ready func()) error {
 			ready()
 		}
 	}
-
-	// Block until a listener fails or is shut down.
 	return <-errCh
 }
 
 // Shutdown gracefully shuts down both listeners.
 func (s *Server) Shutdown() error {
 	var firstErr error
-
 	if s.udp != nil {
-		if err := s.udp.Shutdown(); err != nil && firstErr == nil {
+		if err := s.udp.Shutdown(); err != nil {
 			firstErr = err
 		}
 	}
@@ -179,36 +106,25 @@ func (s *Server) Shutdown() error {
 			firstErr = err
 		}
 	}
-
 	return firstErr
 }
 
-// handleQuery is the miekg/dns handler for all queries in the zone.
-func (s *Server) handleQuery(w dns.ResponseWriter, r *dns.Msg) {
+func (s *Server) handleQuery(w dns.ResponseWriter, request *dns.Msg) {
 	started := time.Now()
-	msg := new(dns.Msg)
-	msg.SetReply(r)
-	msg.Authoritative = true
+	response := new(dns.Msg)
+	response.SetReply(request)
+	response.Authoritative = true
 
-	for _, q := range r.Question {
-		switch q.Qtype {
-		case dns.TypeA:
-			s.handleA(msg, q)
-		case dns.TypeTXT:
-			s.handleTXT(msg, q)
-		case dns.TypeSOA:
-			s.handleSOA(msg, q)
-		case dns.TypeNS:
-			s.handleNS(msg, q)
-		case dns.TypeCAA:
-			s.handleCAA(msg, q)
-		default:
-			msg.Rcode = dns.RcodeSuccess
-		}
+	var registrationID string
+	if len(request.Question) != 1 {
+		response.Rcode = dns.RcodeFormatError
+	} else {
+		registrationID = s.answer(response, request.Question[0]).registration.ID
 	}
 
-	err := w.WriteMsg(msg)
+	err := w.WriteMsg(response)
 	if s.recorder != nil {
+		s.recorder.RecordDNSQuery(registrationID)
 		s.recorder.RecordResponse(err == nil, time.Since(started))
 	}
 	if err != nil {
@@ -216,130 +132,160 @@ func (s *Server) handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 	}
 }
 
-// handleA resolves A queries by parsing the IP from the subdomain.
-// Queries for the zone apex or NS hostnames return the server IP.
-// Example: 192-168-1-50.lancert.dev. -> 192.168.1.50
-// Example: foo.192-168-1-50.lancert.dev. -> 192.168.1.50
-func (s *Server) handleA(msg *dns.Msg, q dns.Question) {
-	name := strings.ToLower(q.Name)
+type ownerKind uint8
 
-	// Zone apex -> server IP
-	if name == s.config.Zone {
-		s.appendA(msg, q.Name, s.config.ServerIP)
-		return
+const (
+	ownerUnknown ownerKind = iota
+	ownerApex
+	ownerNameserver
+	ownerStatic
+	ownerRegistration
+	ownerWildcard
+	ownerChallenge
+)
+
+type owner struct {
+	kind         ownerKind
+	registration registration.Registration
+	static       StaticTXTRecord
+}
+
+func (s *Server) answer(msg *dns.Msg, q dns.Question) owner {
+	resolved := s.resolveOwner(strings.ToLower(q.Name))
+	if resolved.kind == ownerUnknown {
+		s.negative(msg, true)
+		return resolved
 	}
 
-	// NS glue records -> server IP
+	switch q.Qtype {
+	case dns.TypeA:
+		s.answerA(msg, q, resolved)
+	case dns.TypeTXT:
+		s.answerTXT(msg, q, resolved)
+	case dns.TypeSOA:
+		if resolved.kind == ownerApex {
+			msg.Answer = append(msg.Answer, s.soaRR(s.config.Zone))
+		} else {
+			s.negative(msg, false)
+		}
+	case dns.TypeNS:
+		if resolved.kind == ownerApex {
+			s.appendNS(msg, q.Name)
+		} else {
+			s.negative(msg, false)
+		}
+	default:
+		s.negative(msg, false)
+	}
+	return resolved
+}
+
+func (s *Server) resolveOwner(name string) owner {
+	if name == strings.ToLower(s.config.Zone) {
+		return owner{kind: ownerApex, static: s.config.StaticTXT[name]}
+	}
 	for _, ns := range s.config.NSRecords {
 		if name == strings.ToLower(ns) {
-			s.appendA(msg, q.Name, s.config.ServerIP)
-			return
+			return owner{kind: ownerNameserver, static: s.config.StaticTXT[name]}
 		}
 	}
-
-	// Extract IP label from subdomain
-	ipLabel := extractIPLabel(name, s.config.Zone)
-	if ipLabel == "" {
-		msg.Rcode = dns.RcodeNameError
-		msg.Ns = append(msg.Ns, s.soaRR(s.config.Zone))
-		return
+	if static, ok := s.config.StaticTXT[name]; ok {
+		return owner{kind: ownerStatic, static: static}
 	}
 
-	addr, err := privateip.ParseSubdomain(ipLabel)
-	if err != nil {
-		msg.Rcode = dns.RcodeNameError
-		msg.Ns = append(msg.Ns, s.soaRR(s.config.Zone))
-		return
+	labels, ok := relativeLabels(name, strings.ToLower(s.config.Zone))
+	if !ok {
+		return owner{}
 	}
+	var hostname string
+	kind := ownerUnknown
+	switch {
+	case len(labels) == 1:
+		hostname, kind = labels[0], ownerRegistration
+	case len(labels) == 2 && labels[0] == "_acme-challenge":
+		hostname, kind = labels[1], ownerChallenge
+	case len(labels) == 2:
+		hostname, kind = labels[1], ownerWildcard
+	default:
+		return owner{}
+	}
+	if !validHostname(hostname) || s.state == nil {
+		return owner{}
+	}
+	registered, found := s.state.Lookup(hostname)
+	if !found {
+		return owner{}
+	}
+	return owner{kind: kind, registration: registered}
+}
 
-	s.appendA(msg, q.Name, addr)
-	if s.recorder != nil {
-		s.recorder.RecordTarget(addr)
+func (s *Server) answerA(msg *dns.Msg, q dns.Question, resolved owner) {
+	switch resolved.kind {
+	case ownerApex, ownerNameserver:
+		s.appendA(msg, q.Name, s.config.ServerIP)
+	case ownerRegistration, ownerWildcard:
+		s.appendA(msg, q.Name, resolved.registration.TargetIP)
+	default:
+		s.negative(msg, false)
 	}
 }
 
-// handleTXT serves configured static records and in-memory challenge records.
-// When no TXT records exist, the SOA is included in the authority section
-// (NODATA response per RFC 2308) so resolvers cache the negative answer
-// for soaMinTTL instead of their own (potentially much longer) default.
-func (s *Server) handleTXT(msg *dns.Msg, q dns.Question) {
-	// Normalize to lowercase: DNS is case-insensitive (RFC 4343) and LE's
-	// validators use 0x20 randomization, sending mixed-case query names.
-	name := strings.ToLower(q.Name)
-	static := s.config.StaticTXT[name]
-	dynamic := s.txtStore.Lookup(name)
-	if len(static.Values) == 0 && len(dynamic) == 0 {
-		msg.Ns = append(msg.Ns, s.soaRR(s.config.Zone))
+func (s *Server) answerTXT(msg *dns.Msg, q dns.Question, resolved owner) {
+	if resolved.kind == ownerChallenge {
+		for _, value := range resolved.registration.Challenges {
+			if value != "" {
+				s.appendTXT(msg, q.Name, challengeTTL, value)
+			}
+		}
+		if len(msg.Answer) == 0 {
+			s.negative(msg, false)
+		}
 		return
 	}
-
-	staticTTL := static.TTL
-	if len(dynamic) > 0 {
-		// parseStaticTXT reserves _acme-challenge, so overlap is not expected
-		// in normal startup configuration. Config can also be constructed
-		// directly, however; if values coexist, use TTL 0 for the entire RRset
-		// as required by RFC 2181 section 5 and appropriate for an active ACME
-		// challenge.
-		staticTTL = 0
+	if len(resolved.static.Values) > 0 {
+		for _, value := range resolved.static.Values {
+			s.appendTXT(msg, q.Name, resolved.static.TTL, value)
+		}
+		return
 	}
+	s.negative(msg, false)
+}
 
-	for _, value := range static.Values {
-		msg.Answer = append(msg.Answer, &dns.TXT{
-			Hdr: dns.RR_Header{
-				Name:   q.Name,
-				Rrtype: dns.TypeTXT,
-				Class:  dns.ClassINET,
-				Ttl:    staticTTL,
-			},
-			Txt: splitTXTValue(value),
+func (s *Server) negative(msg *dns.Msg, nameError bool) {
+	if nameError {
+		msg.Rcode = dns.RcodeNameError
+	}
+	if len(msg.Ns) == 0 {
+		msg.Ns = append(msg.Ns, s.soaRR(s.config.Zone))
+	}
+}
+
+func (s *Server) appendA(msg *dns.Msg, name string, addr netip.Addr) {
+	msg.Answer = append(msg.Answer, &dns.A{
+		Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: registrationTTL},
+		A:   net.IP(addr.AsSlice()),
+	})
+}
+
+func (s *Server) appendTXT(msg *dns.Msg, name string, ttl uint32, value string) {
+	msg.Answer = append(msg.Answer, &dns.TXT{
+		Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: ttl},
+		Txt: splitTXTValue(value),
+	})
+}
+
+func (s *Server) appendNS(msg *dns.Msg, name string) {
+	for _, ns := range s.config.NSRecords {
+		msg.Answer = append(msg.Answer, &dns.NS{
+			Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeNS, Class: dns.ClassINET, Ttl: 3600},
+			Ns:  ns,
 		})
 	}
-
-	for _, value := range dynamic {
-		msg.Answer = append(msg.Answer, &dns.TXT{
-			Hdr: dns.RR_Header{
-				Name:   q.Name,
-				Rrtype: dns.TypeTXT,
-				Class:  dns.ClassINET,
-				Ttl:    0,
-			},
-			Txt: []string{value},
-		})
-	}
 }
 
-// splitTXTValue divides a logical TXT value into the 255-byte character
-// strings supported by the DNS wire format. Resolvers concatenate these
-// strings when presenting the value.
-func splitTXTValue(value string) []string {
-	const maxCharacterStringLen = 255
-
-	parts := make([]string, 0, (len(value)+maxCharacterStringLen-1)/maxCharacterStringLen)
-	for len(value) > maxCharacterStringLen {
-		parts = append(parts, value[:maxCharacterStringLen])
-		value = value[maxCharacterStringLen:]
-	}
-	return append(parts, value)
-}
-
-// handleSOA appends the SOA record for the zone.
-// SOA TTL matches MINTTL so that buggy proxies that use min(TTL, MINTTL) or
-// just TTL for negative caching still respect the intended short window.
-func (s *Server) handleSOA(msg *dns.Msg, q dns.Question) {
-	msg.Answer = append(msg.Answer, s.soaRR(q.Name))
-}
-
-// soaRR returns the SOA record for the zone. Used both in direct SOA responses
-// and in the authority section of negative responses (NXDOMAIN / NODATA) per
-// RFC 2308, so that resolvers know how long to cache the negative answer.
 func (s *Server) soaRR(name string) *dns.SOA {
 	return &dns.SOA{
-		Hdr: dns.RR_Header{
-			Name:   name,
-			Rrtype: dns.TypeSOA,
-			Class:  dns.ClassINET,
-			Ttl:    soaMinTTL,
-		},
+		Hdr:     dns.RR_Header{Name: name, Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: soaMinTTL},
 		Ns:      s.config.SOAMname,
 		Mbox:    s.config.SOARname,
 		Serial:  1,
@@ -350,76 +296,42 @@ func (s *Server) soaRR(name string) *dns.SOA {
 	}
 }
 
-// handleNS appends NS records for the zone.
-func (s *Server) handleNS(msg *dns.Msg, q dns.Question) {
-	for _, ns := range s.config.NSRecords {
-		msg.Answer = append(msg.Answer, &dns.NS{
-			Hdr: dns.RR_Header{
-				Name:   q.Name,
-				Rrtype: dns.TypeNS,
-				Class:  dns.ClassINET,
-				Ttl:    3600,
-			},
-			Ns: ns,
-		})
+func splitTXTValue(value string) []string {
+	const maxLen = 255
+	parts := make([]string, 0, (len(value)+maxLen-1)/maxLen)
+	for len(value) > maxLen {
+		parts = append(parts, value[:maxLen])
+		value = value[maxLen:]
 	}
+	return append(parts, value)
 }
 
-// handleCAA appends CAA records restricting issuance to configured CAs.
-func (s *Server) handleCAA(msg *dns.Msg, q dns.Question) {
-	for _, issuer := range s.config.CAAIssuers {
-		msg.Answer = append(msg.Answer, &dns.CAA{
-			Hdr: dns.RR_Header{
-				Name:   q.Name,
-				Rrtype: dns.TypeCAA,
-				Class:  dns.ClassINET,
-				Ttl:    3600,
-			},
-			Flag:  0,
-			Tag:   "issue",
-			Value: issuer,
-		})
+func relativeLabels(name, zone string) ([]string, bool) {
+	suffix := "." + zone
+	if !strings.HasSuffix(name, suffix) {
+		return nil, false
 	}
+	relative := strings.TrimSuffix(name, suffix)
+	if relative == "" {
+		return nil, false
+	}
+	return strings.Split(relative, "."), true
 }
 
-// appendA adds an A record to the message answer section.
-func (s *Server) appendA(msg *dns.Msg, name string, addr netip.Addr) {
-	ip := net.IP(addr.AsSlice())
-	msg.Answer = append(msg.Answer, &dns.A{
-		Hdr: dns.RR_Header{
-			Name:   name,
-			Rrtype: dns.TypeA,
-			Class:  dns.ClassINET,
-			Ttl:    300,
-		},
-		A: ip,
-	})
+func validHostname(hostname string) bool {
+	if len(hostname) < 1 || len(hostname) > 63 || hostname[0] == '-' || hostname[len(hostname)-1] == '-' {
+		return false
+	}
+	for i := range len(hostname) {
+		c := hostname[i]
+		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') {
+			return false
+		}
+	}
+	return true
 }
 
-// extractIPLabel finds the IP-bearing label from a subdomain within the zone.
-// For "foo.192-168-1-50.lancert.dev." with zone "lancert.dev.", returns "192-168-1-50".
-// For "192-168-1-50.lancert.dev." returns "192-168-1-50".
-// Returns "" if the name is not under the zone or has no subdomain.
-func extractIPLabel(name, zone string) string {
-	if !strings.HasSuffix(name, "."+zone) && name != zone {
-		return ""
-	}
-
-	// Strip the zone suffix to get subdomain part
-	sub := strings.TrimSuffix(name, "."+zone)
-	if sub == "" || sub == name {
-		return ""
-	}
-
-	// The IP label is the rightmost subdomain label before the zone.
-	// "foo.192-168-1-50" -> "192-168-1-50"
-	// "192-168-1-50" -> "192-168-1-50"
-	parts := strings.Split(sub, ".")
-	return parts[len(parts)-1]
-}
-
-// PacketConnAddr returns the local address of the UDP listener,
-// useful in tests to find the assigned port when using ":0".
+// PacketConnAddr returns the UDP listener address for tests.
 func (s *Server) PacketConnAddr() net.Addr {
 	if s.udp == nil {
 		return nil

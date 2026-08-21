@@ -8,55 +8,47 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"golang.org/x/time/rate"
 )
 
-func TestCertificateReadMiddleware(t *testing.T) {
+func TestRateLimiterScopesClientIPs(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	limiter := NewRateLimiter(ctx, CertificateReadRPS, CertificateReadBurst)
-
-	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	})
-	h := limiter.CertificateReadMiddleware(inner)
-
-	request := func(method, path string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(method, path, nil)
-		req = req.WithContext(WithHashedIP(req.Context(), "client-a"))
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, req)
-		return rec
-	}
-
-	for i := 0; i < CertificateReadBurst; i++ {
-		assert.Equal(t, http.StatusNoContent, request(http.MethodGet, "/certs/192.168.1.50").Code)
-	}
-
-	rec := request(http.MethodGet, "/certs/192.168.1.50/fullchain.pem")
-	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
-	assert.Equal(t, "10", rec.Header().Get("Retry-After"))
-
-	assert.Equal(t, http.StatusNoContent, request(http.MethodPost, "/certs/192.168.1.50").Code)
-	assert.Equal(t, http.StatusNoContent, request(http.MethodGet, "/health").Code)
+	limiter := NewRateLimiter(ctx, rate.Every(time.Hour), 2)
+	assert.True(t, limiter.Allow("a"))
+	assert.True(t, limiter.Allow("a"))
+	assert.False(t, limiter.Allow("a"))
+	assert.True(t, limiter.Allow("b"))
 }
 
-func TestInitialIssuanceRateLimiter(t *testing.T) {
+func TestLimitsApplyIndependentEndpointBucketsPerClientIP(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	limiter := NewInitialIssuanceRateLimiter(ctx)
-
-	for range InitialIssuanceBurst {
-		allowed, retryAfter := limiter.AllowWithRetry("client-a")
-		assert.True(t, allowed)
-		assert.Zero(t, retryAfter)
+	limits := NewLimits(ctx)
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusCreated) })
+	handler := limits.Middleware(inner)
+	request := func(clientIP, path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, path, nil)
+		req = req.WithContext(WithHashedIP(req.Context(), clientIP))
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, req)
+		return recorder
 	}
 
-	allowed, retryAfter := limiter.AllowWithRetry("client-a")
-	assert.False(t, allowed)
-	assert.Greater(t, retryAfter, 23*time.Hour)
-	assert.LessOrEqual(t, retryAfter, InitialIssuanceRefill)
+	for range RegistrationBurst {
+		assert.Equal(t, http.StatusCreated, request("a", "/register/10.0.0.1").Code)
+	}
+	limited := request("a", "/register/10.0.0.1")
+	assert.Equal(t, http.StatusTooManyRequests, limited.Code)
+	assert.Equal(t, RegistrationRetryAfter, limited.Header().Get("Retry-After"))
+	assert.Equal(t, http.StatusCreated, request("b", "/register/10.0.0.1").Code)
 
-	allowed, retryAfter = limiter.AllowWithRetry("client-b")
-	assert.True(t, allowed)
-	assert.Zero(t, retryAfter)
+	for range UpdateBurst {
+		assert.Equal(t, http.StatusCreated, request("a", "/update").Code)
+	}
+	limited = request("a", "/update")
+	assert.Equal(t, http.StatusTooManyRequests, limited.Code)
+	assert.Equal(t, UpdateRetryAfter, limited.Header().Get("Retry-After"))
+	assert.Equal(t, http.StatusCreated, request("b", "/update").Code)
+	assert.Equal(t, http.StatusCreated, request("a", "/unlimited").Code)
 }
