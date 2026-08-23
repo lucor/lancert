@@ -70,13 +70,13 @@ func NewWithBuildInfo(store *registration.Store, zone string, snapshot func() me
 	h.mux.HandleFunc("POST /update", h.handleUpdate)
 	h.mux.HandleFunc("GET /health", h.handleHealth)
 	h.mux.HandleFunc("GET /status", h.handleStatusRoute)
-	h.mux.HandleFunc("GET /docs", serveHTML(docsHTML))
-	h.mux.HandleFunc("GET /docs/cli", serveHTML(docsCLIHTML))
-	h.mux.HandleFunc("GET /docs/acme-clients", serveHTML(docsWebServersHTML))
-	h.mux.HandleFunc("GET /docs/api", serveHTML(docsAPIHTML))
+	h.mux.HandleFunc("GET /docs", serveHTML(docsTemplate))
+	h.mux.HandleFunc("GET /docs/cli", serveHTML(docsCLITemplate))
+	h.mux.HandleFunc("GET /docs/acme-clients", serveHTML(docsWebServersTemplate))
+	h.mux.HandleFunc("GET /docs/api", serveHTML(docsAPITemplate))
 	h.mux.HandleFunc("GET /openapi.yaml", handleOpenAPI)
 	h.mux.Handle("GET /assets/", http.HandlerFunc(serveAssets))
-	h.mux.HandleFunc("GET /{$}", serveHTML(indexHTML))
+	h.mux.HandleFunc("GET /{$}", serveHTML(indexTemplate))
 	return h
 }
 
@@ -190,6 +190,7 @@ func (h *Handler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 type statusResponse struct {
+	Analytics  bool          `json:"-"`
 	Status     string        `json:"status"`
 	Version    string        `json:"version"`
 	Commit     string        `json:"commit"`

@@ -221,6 +221,36 @@ func TestPublicPages(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, perform(api.handler, http.MethodGet, "/docs/web-servers", nil, nil).Code)
 }
 
+func TestAnalyticsOnlyOnCanonicalHost(t *testing.T) {
+	api := newTestAPI(t)
+	paths := []string{"/", "/docs", "/docs/cli", "/docs/acme-clients", "/docs/api", "/status"}
+	hosts := map[string]bool{
+		"lancert.dev":         true,
+		"lancert.dev:443":     true,
+		"lancert.dev.":        true,
+		"preview.lancert.dev": false,
+		"localhost:8443":      false,
+	}
+
+	for host, expected := range hosts {
+		for _, path := range paths {
+			t.Run(host+path, func(t *testing.T) {
+				request := httptest.NewRequest(http.MethodGet, path, nil)
+				request.Host = host
+				if path == "/status" {
+					request.Header.Set("Accept", "text/html")
+				}
+				response := httptest.NewRecorder()
+				api.handler.ServeHTTP(response, request)
+
+				tracked := strings.Contains(response.Body.String(), "analytics.lucor.dev/script.js")
+				assert.Equal(t, expected, tracked)
+				assert.Contains(t, response.Header().Values("Vary"), "Host")
+			})
+		}
+	}
+}
+
 func TestReadinessLifecycleIsStickyDuringShutdown(t *testing.T) {
 	api := newTestAPI(t)
 	handler := New(api.store, "lancert.dev.", nil, nil)

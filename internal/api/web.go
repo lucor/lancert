@@ -5,7 +5,9 @@ import (
 	"html/template"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
+	"strings"
 )
 
 //go:embed static/index.html
@@ -32,8 +34,17 @@ var openapiYAML []byte
 //go:embed static/assets
 var assetsFS embed.FS
 
+var indexTemplate = template.Must(template.New("index").Parse(string(indexHTML)))
+var docsTemplate = template.Must(template.New("docs").Parse(string(docsHTML)))
+var docsCLITemplate = template.Must(template.New("docs-cli").Parse(string(docsCLIHTML)))
+var docsAPITemplate = template.Must(template.New("docs-api").Parse(string(docsAPIHTML)))
+var docsWebServersTemplate = template.Must(template.New("docs-web-servers").Parse(string(docsWebServersHTML)))
 var statusTemplate = template.Must(template.New("status").Parse(statusHTML))
 var embeddedAssets = mustEmbeddedAssets()
+
+type pageData struct {
+	Analytics bool
+}
 
 func mustEmbeddedAssets() http.Handler {
 	sub, err := fs.Sub(assetsFS, "static/assets")
@@ -51,11 +62,22 @@ func serveAssets(w http.ResponseWriter, r *http.Request) {
 	embeddedAssets.ServeHTTP(w, r)
 }
 
-func serveHTML(content []byte) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
+func serveHTML(page *template.Template) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write(content)
+		w.Header().Add("Vary", "Host")
+		if err := page.Execute(w, pageData{Analytics: analyticsHost(r.Host)}); err != nil {
+			slog.Error("render page", "error", err)
+		}
 	}
+}
+
+func analyticsHost(hostport string) bool {
+	host := hostport
+	if parsed, _, err := net.SplitHostPort(hostport); err == nil {
+		host = parsed
+	}
+	return strings.TrimSuffix(strings.ToLower(host), ".") == "lancert.dev"
 }
 
 func handleOpenAPI(w http.ResponseWriter, _ *http.Request) {
@@ -63,12 +85,13 @@ func handleOpenAPI(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write(openapiYAML)
 }
 
-func (h *Handler) handleStatusPage(w http.ResponseWriter, _ *http.Request) {
+func (h *Handler) handleStatusPage(w http.ResponseWriter, r *http.Request) {
 	snapshot := h.snapshot()
 	data := statusResponse{
-		Status:  "operational",
-		Version: h.build.Version,
-		Commit:  h.build.CommitHash,
+		Analytics: analyticsHost(r.Host),
+		Status:    "operational",
+		Version:   h.build.Version,
+		Commit:    h.build.CommitHash,
 		Metrics: statusMetrics{
 			Available:                  !snapshot.Unavailable,
 			Queries24H:                 snapshot.Queries24H,
@@ -81,6 +104,7 @@ func (h *Handler) handleStatusPage(w http.ResponseWriter, _ *http.Request) {
 		data.Status = "degraded"
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Add("Vary", "Host")
 	if err := statusTemplate.Execute(w, data); err != nil {
 		slog.Error("render status page", "error", err)
 	}
