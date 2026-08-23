@@ -29,16 +29,16 @@ const histogramLen = len(LatencyBounds) + 1
 // serving paths.
 type Recorder interface {
 	RecordDNSQuery(registrationID string)
-	RecordChallengeUpdate(registrationID string)
+	RecordChallengeUpdate(registrationID string, clientFamily ClientFamily)
 	RecordResponse(writeSucceeded bool, latency time.Duration)
 }
 
 // Disabled is a fail-open recorder. It intentionally discards every event.
 type Disabled struct{}
 
-func (Disabled) RecordDNSQuery(string)              {}
-func (Disabled) RecordChallengeUpdate(string)       {}
-func (Disabled) RecordResponse(bool, time.Duration) {}
+func (Disabled) RecordDNSQuery(string)                      {}
+func (Disabled) RecordChallengeUpdate(string, ClientFamily) {}
+func (Disabled) RecordResponse(bool, time.Duration)         {}
 
 // DailyLookup is the registered-host DNS query count for one UTC date.
 type DailyLookup struct {
@@ -50,6 +50,12 @@ type DailyLookup struct {
 type RegistrationLookup struct {
 	RegistrationID string
 	Queries        uint64
+}
+
+// ClientFamilyActivity is the accepted DNS-01 update count for one client family.
+type ClientFamilyActivity struct {
+	ClientFamily    ClientFamily
+	AcceptedUpdates uint64
 }
 
 // Snapshot is a point-in-time copy of the metrics used by status endpoints.
@@ -65,6 +71,7 @@ type Snapshot struct {
 	RegistrationLookups30D     []RegistrationLookup
 	RegisteredQueries30D       uint64
 	RegisteredQueriesTotal     uint64
+	ClientFamilies             []ClientFamilyActivity
 	ActiveRegistrations30D     uint64
 	ACMEActiveRegistrations30D uint64
 	ChallengeUpdates30D        uint64
@@ -119,10 +126,11 @@ type Store struct {
 	cfg     config
 	started time.Time
 
-	mu            sync.Mutex
-	pendingHourly map[time.Time]aggregate
-	pendingDaily  map[string]map[string]registrationActivity
-	recent        [5]minuteBucket
+	mu             sync.Mutex
+	pendingHourly  map[time.Time]aggregate
+	pendingDaily   map[string]map[string]registrationActivity
+	pendingClients map[string]map[ClientFamily]uint64
+	recent         [5]minuteBucket
 
 	flushMu      sync.Mutex
 	snapMu       sync.RWMutex
@@ -169,7 +177,7 @@ func Open(path string, options ...Option) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("metrics: migrate: %w", err)
 	}
-	s := &Store{db: db, cfg: c, started: c.now().UTC(), pendingHourly: make(map[time.Time]aggregate), pendingDaily: make(map[string]map[string]registrationActivity), stop: make(chan struct{}), done: make(chan struct{})}
+	s := &Store{db: db, cfg: c, started: c.now().UTC(), pendingHourly: make(map[time.Time]aggregate), pendingDaily: make(map[string]map[string]registrationActivity), pendingClients: make(map[string]map[ClientFamily]uint64), stop: make(chan struct{}), done: make(chan struct{})}
 	err = s.RebuildSnapshot(context.Background())
 	if err != nil {
 		db.Close()
@@ -229,13 +237,22 @@ func (s *Store) RecordDNSQuery(registrationID string) {
 }
 
 // RecordChallengeUpdate records one authenticated, accepted DNS-01 update.
-func (s *Store) RecordChallengeUpdate(registrationID string) {
+func (s *Store) RecordChallengeUpdate(registrationID string, clientFamily ClientFamily) {
 	if registrationID == "" {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.recordActivity(dateOf(s.cfg.now()), registrationID, registrationActivity{challengeUpdates: 1})
+	clientFamily = normalizeClientFamily(clientFamily)
+	date := dateOf(s.cfg.now())
+	s.recordActivity(date, registrationID, registrationActivity{challengeUpdates: 1})
+	if s.pendingClients == nil {
+		s.pendingClients = make(map[string]map[ClientFamily]uint64)
+	}
+	if s.pendingClients[date] == nil {
+		s.pendingClients[date] = make(map[ClientFamily]uint64)
+	}
+	s.pendingClients[date][clientFamily]++
 }
 
 func (s *Store) recordActivity(date, registrationID string, observation registrationActivity) {
@@ -305,10 +322,10 @@ func (s *Store) Flush(ctx context.Context) error {
 	s.flushMu.Lock()
 	defer s.flushMu.Unlock()
 	s.mu.Lock()
-	hours, days := s.pendingHourly, s.pendingDaily
-	s.pendingHourly, s.pendingDaily = make(map[time.Time]aggregate), make(map[string]map[string]registrationActivity)
+	hours, days, clients := s.pendingHourly, s.pendingDaily, s.pendingClients
+	s.pendingHourly, s.pendingDaily, s.pendingClients = make(map[time.Time]aggregate), make(map[string]map[string]registrationActivity), make(map[string]map[ClientFamily]uint64)
 	s.mu.Unlock()
-	err := s.flushBatch(ctx, hours, days)
+	err := s.flushBatch(ctx, hours, days, clients)
 	s.mu.Lock()
 	if err == nil {
 		s.lastFlushAt = s.cfg.now().UTC()
@@ -335,6 +352,14 @@ func (s *Store) Flush(ctx context.Context) error {
 				s.pendingDaily[date][registrationID] = pending
 			}
 		}
+		for date, families := range clients {
+			if s.pendingClients[date] == nil {
+				s.pendingClients[date] = make(map[ClientFamily]uint64)
+			}
+			for family, updates := range families {
+				s.pendingClients[date][family] += updates
+			}
+		}
 		s.mu.Unlock()
 	}
 	return err
@@ -354,7 +379,7 @@ func addAggregate(a *aggregate, b aggregate) {
 	}
 }
 
-func (s *Store) flushBatch(ctx context.Context, hours map[time.Time]aggregate, days map[string]map[string]registrationActivity) error {
+func (s *Store) flushBatch(ctx context.Context, hours map[time.Time]aggregate, days map[string]map[string]registrationActivity, clients map[string]map[ClientFamily]uint64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -369,6 +394,13 @@ func (s *Store) flushBatch(ctx context.Context, hours map[time.Time]aggregate, d
 	for date, registrations := range days {
 		for registrationID, activity := range registrations {
 			if _, err = tx.ExecContext(ctx, `INSERT INTO registration_activity_daily(date,registration_id,dns_queries,challenge_updates) VALUES(?,?,?,?) ON CONFLICT(date,registration_id) DO UPDATE SET dns_queries=dns_queries+excluded.dns_queries,challenge_updates=challenge_updates+excluded.challenge_updates`, date, registrationID, activity.dnsQueries, activity.challengeUpdates); err != nil {
+				return err
+			}
+		}
+	}
+	for date, families := range clients {
+		for family, updates := range families {
+			if _, err = tx.ExecContext(ctx, `INSERT INTO client_activity_daily(date,client_family,accepted_updates) VALUES(?,?,?) ON CONFLICT(date,client_family) DO UPDATE SET accepted_updates=accepted_updates+excluded.accepted_updates`, date, family, updates); err != nil {
 				return err
 			}
 		}
@@ -415,6 +447,21 @@ func (s *Store) RebuildSnapshot(ctx context.Context) error {
 		out.RegisteredQueries30D += daily[date]
 	}
 	if err = s.db.QueryRowContext(ctx, `SELECT COALESCE(sum(dns_queries),0) FROM registration_activity_daily`).Scan(&out.RegisteredQueriesTotal); err != nil {
+		return s.snapshotError(err)
+	}
+	clientRows, err := s.db.QueryContext(ctx, `SELECT client_family,sum(accepted_updates) FROM client_activity_daily GROUP BY client_family ORDER BY sum(accepted_updates) DESC,client_family`)
+	if err != nil {
+		return s.snapshotError(err)
+	}
+	for clientRows.Next() {
+		var activity ClientFamilyActivity
+		if err = clientRows.Scan(&activity.ClientFamily, &activity.AcceptedUpdates); err != nil {
+			clientRows.Close()
+			return s.snapshotError(err)
+		}
+		out.ClientFamilies = append(out.ClientFamilies, activity)
+	}
+	if err = clientRows.Close(); err != nil {
 		return s.snapshotError(err)
 	}
 	lookupRows, err := s.db.QueryContext(ctx, `SELECT registration_id,sum(dns_queries) FROM registration_activity_daily WHERE date BETWEEN ? AND ? GROUP BY registration_id`, startDate, endDate)
@@ -514,6 +561,7 @@ func (s *Store) Snapshot() Snapshot {
 	r := s.snap
 	r.DailyLookups = append([]DailyLookup(nil), r.DailyLookups...)
 	r.RegistrationLookups30D = append([]RegistrationLookup(nil), r.RegistrationLookups30D...)
+	r.ClientFamilies = append([]ClientFamilyActivity(nil), r.ClientFamilies...)
 	return r
 }
 

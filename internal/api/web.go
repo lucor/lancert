@@ -68,6 +68,7 @@ type statusPageData struct {
 	TopIPs                 []privateIPUsageView
 	DNSPrefixes            []networkUsageView
 	DNSIPs                 []privateIPUsageView
+	ClientFamilies         []metrics.ClientFamilyActivity
 	RegisteredQueries30D   uint64
 	RegisteredQueriesTotal uint64
 }
@@ -142,6 +143,7 @@ func (h *Handler) handleStatusPage(w http.ResponseWriter, r *http.Request) {
 		MetricsUpdatedAt:       snapshot.FreshAt,
 		RegisteredQueries30D:   snapshot.RegisteredQueries30D,
 		RegisteredQueriesTotal: snapshot.RegisteredQueriesTotal,
+		ClientFamilies:         snapshot.ClientFamilies,
 	}
 	if !h.operational() || snapshot.Unavailable || snapshot.Degraded {
 		data.Status = "degraded"

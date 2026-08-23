@@ -166,7 +166,7 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		h.stateHealthy.Store(true)
-		h.recorder.RecordChallengeUpdate(registrationID)
+		h.recorder.RecordChallengeUpdate(registrationID, metrics.ClientFamilyFromUserAgent(r.UserAgent()))
 		writeJSON(w, http.StatusOK, map[string]string{"txt": request.TXT})
 	case errors.Is(err, registration.ErrForbidden):
 		writeError(w, http.StatusUnauthorized, "forbidden")

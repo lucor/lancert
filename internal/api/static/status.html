@@ -224,6 +224,16 @@
         {{end}}
       </section>
       {{end}}
+
+      {{if .ClientFamilies}}
+      <section>
+        <div class="section-heading">
+          <h2>ACME client activity</h2>
+          <p>Accepted DNS-01 updates by detected client family.</p>
+        </div>
+        <div class="table-wrap"><table><thead><tr><th>Client family</th><th class="numeric">Accepted updates</th></tr></thead><tbody>{{range .ClientFamilies}}<tr><td><code>{{.ClientFamily}}</code></td><td class="numeric">{{.AcceptedUpdates}}</td></tr>{{end}}</tbody></table></div>
+      </section>
+      {{end}}
     </main>
     <footer>
       <p>The <a href="https://github.com/lucor/lancert/blob/main/LICENSE">lancert software is MIT-licensed</a>. The software and DNS service are provided “as is”, without warranty.</p>

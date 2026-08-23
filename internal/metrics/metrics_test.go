@@ -25,8 +25,8 @@ func TestPersistenceUTCAndP95(t *testing.T) {
 		s.RecordDNSQuery("registration-1")
 		s.RecordResponse(false, 100*time.Millisecond)
 	}
-	s.RecordChallengeUpdate("registration-1")
-	s.RecordChallengeUpdate("registration-1")
+	s.RecordChallengeUpdate("registration-1", "acme.sh")
+	s.RecordChallengeUpdate("registration-1", "acme.sh")
 	require.NoError(t, s.Flush(context.Background()))
 	require.NoError(t, s.RebuildSnapshot(context.Background()))
 	snap := s.Snapshot()
@@ -39,6 +39,7 @@ func TestPersistenceUTCAndP95(t *testing.T) {
 	require.Equal(t, uint64(20), snap.RegisteredQueries30D)
 	require.Equal(t, uint64(20), snap.RegisteredQueriesTotal)
 	require.Equal(t, []RegistrationLookup{{RegistrationID: "registration-1", Queries: 20}}, snap.RegistrationLookups30D)
+	require.Equal(t, []ClientFamilyActivity{{ClientFamily: "acme.sh", AcceptedUpdates: 2}}, snap.ClientFamilies)
 	require.Equal(t, uint64(1), snap.ActiveRegistrations30D)
 	require.Equal(t, uint64(1), snap.ACMEActiveRegistrations30D)
 	require.Equal(t, uint64(2), snap.ChallengeUpdates30D)
@@ -47,6 +48,7 @@ func TestPersistenceUTCAndP95(t *testing.T) {
 	s, err = Open(path, WithClock(clock), WithoutBackground())
 	require.NoError(t, err)
 	require.Equal(t, uint64(20), s.Snapshot().Queries24H)
+	require.Equal(t, []ClientFamilyActivity{{ClientFamily: "acme.sh", AcceptedUpdates: 2}}, s.Snapshot().ClientFamilies)
 	// Crossing midnight creates a separate UTC-date aggregate.
 	now = now.Add(time.Minute)
 	s.RecordDNSQuery("registration-1")
@@ -109,7 +111,7 @@ func TestUnavailable(t *testing.T) {
 	require.True(t, snap.Unavailable)
 	var recorder Recorder = Disabled{}
 	recorder.RecordDNSQuery("")
-	recorder.RecordChallengeUpdate("")
+	recorder.RecordChallengeUpdate("", "")
 	recorder.RecordResponse(false, 0)
 }
 
@@ -162,7 +164,7 @@ func TestDatabaseModeAndPragmas(t *testing.T) {
 	var version int
 	var dirty bool
 	require.NoError(t, s.db.QueryRow(`SELECT version,dirty FROM schema_migrations`).Scan(&version, &dirty))
-	require.Equal(t, 1, version)
+	require.Equal(t, 2, version)
 	require.False(t, dirty)
 	require.NoError(t, s.Close(context.Background()))
 }
@@ -194,7 +196,7 @@ func TestRegistrationActivityAccumulatesAfterReopen(t *testing.T) {
 
 	s := open()
 	s.RecordDNSQuery("registration-1")
-	s.RecordChallengeUpdate("registration-1")
+	s.RecordChallengeUpdate("registration-1", "acme.sh")
 	require.NoError(t, s.Close(context.Background()))
 
 	s = open()
@@ -205,9 +207,25 @@ func TestRegistrationActivityAccumulatesAfterReopen(t *testing.T) {
 	require.NoError(t, s.db.QueryRow(`SELECT dns_queries,challenge_updates FROM registration_activity_daily WHERE registration_id='registration-1'`).Scan(&queries, &updates))
 	require.Equal(t, uint64(2), queries)
 	require.Equal(t, uint64(1), updates)
+	var clientFamily string
+	require.NoError(t, s.db.QueryRow(`SELECT client_family FROM client_activity_daily WHERE date='2026-07-21'`).Scan(&clientFamily))
+	require.Equal(t, "acme.sh", clientFamily)
 	require.NoError(t, s.RebuildSnapshot(context.Background()))
 	require.Equal(t, uint64(2), s.Snapshot().ActiveRegistrations30D)
 	require.Equal(t, uint64(1), s.Snapshot().ACMEActiveRegistrations30D)
+	require.Equal(t, []ClientFamilyActivity{{ClientFamily: "acme.sh", AcceptedUpdates: 1}}, s.Snapshot().ClientFamilies)
+	require.NoError(t, s.Close(context.Background()))
+}
+
+func TestChallengeUpdateBoundsClientFamily(t *testing.T) {
+	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
+	s, err := Open(filepath.Join(t.TempDir(), "metrics.db"), WithClock(func() time.Time { return now }), WithoutBackground())
+	require.NoError(t, err)
+
+	s.RecordChallengeUpdate("registration-1", ClientFamily("unbounded-value"))
+	require.NoError(t, s.Flush(context.Background()))
+	require.NoError(t, s.RebuildSnapshot(context.Background()))
+	require.Equal(t, []ClientFamilyActivity{{ClientFamily: ClientFamilyOther, AcceptedUpdates: 1}}, s.Snapshot().ClientFamilies)
 	require.NoError(t, s.Close(context.Background()))
 }
 
@@ -221,7 +239,7 @@ func BenchmarkRecordMethods(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		s.RecordDNSQuery("registration-1")
-		s.RecordChallengeUpdate("registration-1")
+		s.RecordChallengeUpdate("registration-1", "acme.sh")
 		s.RecordResponse(true, time.Millisecond)
 	}
 }

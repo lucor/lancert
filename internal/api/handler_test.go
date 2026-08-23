@@ -26,12 +26,14 @@ type testAPI struct {
 
 type testMetricsRecorder struct {
 	challengeUpdates []string
+	clientFamilies   []metrics.ClientFamily
 }
 
 func (*testMetricsRecorder) RecordDNSQuery(string) {}
 
-func (r *testMetricsRecorder) RecordChallengeUpdate(registrationID string) {
+func (r *testMetricsRecorder) RecordChallengeUpdate(registrationID string, clientFamily metrics.ClientFamily) {
 	r.challengeUpdates = append(r.challengeUpdates, registrationID)
+	r.clientFamilies = append(r.clientFamilies, clientFamily)
 }
 
 func (*testMetricsRecorder) RecordResponse(bool, time.Duration) {}
@@ -46,6 +48,7 @@ func newTestAPI(t *testing.T) testAPI {
 			Queries24H:                 42,
 			RegisteredQueries30D:       42,
 			RegisteredQueriesTotal:     84,
+			ClientFamilies:             []metrics.ClientFamilyActivity{{ClientFamily: "lancert-cli", AcceptedUpdates: 10}},
 			DailyLookups:               []metrics.DailyLookup{{Date: "2026-07-30", Queries: 42}},
 			ACMEActiveRegistrations30D: 3,
 			ResponseP95:                1500 * time.Microsecond,
@@ -127,6 +130,7 @@ func TestAcmeDNSUpdateContract(t *testing.T) {
 		"Content-Type": "application/json",
 		"X-Api-User":   registered.Username,
 		"X-Api-Key":    registered.Password,
+		"User-Agent":   "acme.sh/3.0.7 (https://github.com/acmesh-official/acme.sh)",
 	})
 	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
 	assert.JSONEq(t, `{"txt":"`+testChallenge+`"}`, response.Body.String())
@@ -134,6 +138,7 @@ func TestAcmeDNSUpdateContract(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, testChallenge, state.Challenges[0])
 	assert.Equal(t, []string{state.ID}, api.recorder.challengeUpdates)
+	assert.Equal(t, []metrics.ClientFamily{metrics.ClientFamilyACMESh}, api.recorder.clientFamilies)
 }
 
 func TestUpdateAuthorizationAndValidationResponses(t *testing.T) {
@@ -168,6 +173,7 @@ func TestUpdateAuthorizationAndValidationResponses(t *testing.T) {
 		})
 	}
 	assert.Empty(t, api.recorder.challengeUpdates)
+	assert.Empty(t, api.recorder.clientFamilies)
 }
 
 func TestHealthAndStatus(t *testing.T) {
@@ -206,7 +212,7 @@ func TestPublicPages(t *testing.T) {
 		{"/docs/cli", []string{"CLI Quickstart", "Install the CLI", "lancert 192.168.1.50", "Let’s Encrypt", "rate limits", "lancert renew", "Prefer another ACME client"}, nil},
 		{"/docs/acme-clients", []string{"Use your own ACME client", "Register the target IP", "one-time-secret", "Certbot", "Lego", "acme.sh", "Caddy", "Nginx", "Traefik", "Renew the certificate"}, nil},
 		{"/docs/api", []string{"api-reference", `data-url="/openapi.yaml"`, "Lancert v2"}, nil},
-		{"/status", []string{"lancert status", "Service usage", "Hostnames created", "Private IP addresses", "DNS-01 active hostnames", "DNS queries", "Private network usage", "DNS activity", "Queries by local network", "Queries by private IP", "84", "42"}, map[string]string{"Accept": "text/html"}},
+		{"/status", []string{"lancert status", "Service usage", "Hostnames created", "Private IP addresses", "DNS-01 active hostnames", "DNS queries", "Private network usage", "DNS activity", "Queries by local network", "Queries by private IP", "ACME client activity", "Accepted DNS-01 updates", "lancert-cli", "84", "42"}, map[string]string{"Accept": "text/html"}},
 		{"/openapi.yaml", []string{"openapi: 3.1.0", "/register/{ip}", "/update"}, nil},
 	}
 	for _, test := range tests {
