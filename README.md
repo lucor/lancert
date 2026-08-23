@@ -16,9 +16,12 @@ them on your machine.
 The [Lancert CLI](https://github.com/lucor/lancert-cli) is the quickest path:
 
 ```console
-go install go.lucor.dev/lancert-cli/cmd/lancert@latest
+brew install lucor/tap/lancert
 lancert 192.168.1.50
 ```
+
+You can also install the CLI from source with
+`go install go.lucor.dev/lancert-cli/cmd/lancert@latest`.
 
 The CLI currently uses Let's Encrypt by default. Let's Encrypt terms, policies,
 and rate limits apply. Run `lancert renew` regularly to renew locally managed

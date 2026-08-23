@@ -209,7 +209,7 @@ func TestPublicPages(t *testing.T) {
 		{"/assets/lancert-logo.svg", []string{"<svg"}, nil},
 		{"/", []string{"Local HTTPS for private IP addresses", "lancert </span><span class=\"t-url\">192.168.1.50", "Prefer your own ACME client", "Why use lancert for local HTTPS", "How local HTTPS works", "Example: Caddy", "Let’s Encrypt", "rate limits", "lancert renew", "What do I trust Lancert with?"}, nil},
 		{"/docs", []string{"Documentation", "Lancert CLI", "Use your own ACME client", "CLI", "Let’s Encrypt", "Renewal", "Certbot", "Lego", "acme.sh", "/docs/api"}, nil},
-		{"/docs/cli", []string{"CLI Quickstart", "Install the CLI", "lancert 192.168.1.50", "Let’s Encrypt", "rate limits", "lancert renew", "Prefer another ACME client"}, nil},
+		{"/docs/cli", []string{"CLI Quickstart", "Install the CLI", "brew install lucor/tap/lancert", "go install go.lucor.dev/lancert-cli/cmd/lancert@latest", "lancert 192.168.1.50", "Let’s Encrypt", "rate limits", "lancert renew", "Prefer another ACME client"}, nil},
 		{"/docs/acme-clients", []string{"Use your own ACME client", "Register the target IP", "one-time-secret", "Certbot", "Lego", "acme.sh", "Caddy", "Nginx", "Traefik", "Renew the certificate"}, nil},
 		{"/docs/api", []string{"api-reference", `data-url="/openapi.yaml"`, "Lancert v2"}, nil},
 		{"/status", []string{"lancert status", "Service usage", "Hostnames created", "Private IP addresses", "DNS-01 active hostnames", "DNS queries", "Private network usage", "DNS activity", "Queries by local network", "Queries by private IP", "ACME client activity", "Accepted DNS-01 updates", "lancert-cli", "84", "42"}, map[string]string{"Accept": "text/html"}},
