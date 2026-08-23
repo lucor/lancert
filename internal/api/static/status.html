@@ -1,4 +1,16 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="Live authoritative DNS performance for Lancert."><meta name="theme-color" content="#FFFFFF"><link rel="icon" href="/assets/favicon.ico" sizes="48x48"><link rel="icon" href="/assets/favicon.svg" sizes="any" type="image/svg+xml"><link rel="apple-touch-icon" href="/assets/apple-touch-icon.png"><title>lancert status — DNS performance</title>{{if .Analytics}}<script defer src="https://analytics.lucor.dev/script.js" data-website-id="1c9b0509-2f00-493b-bb0a-da02ffb6ff1d"></script>{{end}}<style>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Live Lancert usage across created hostnames and private IPv4 networks.">
+  <meta name="theme-color" content="#FFFFFF">
+  <link rel="icon" href="/assets/favicon.ico" sizes="48x48">
+  <link rel="icon" href="/assets/favicon.svg" sizes="any" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+  <title>lancert status — Service usage</title>
+  {{if .Analytics}}<script defer src="https://analytics.lucor.dev/script.js" data-website-id="1c9b0509-2f00-493b-bb0a-da02ffb6ff1d"></script>{{end}}
+  <style>
     :root {
       color-scheme: light;
       --lan: #078DE5;
@@ -14,56 +26,45 @@
       --surface: #f9fafb;
       --warning: #916b28;
       --warning-soft: #fff7e7;
-      --danger: #a24b4b;
-      --danger-soft: #fff1f1;
       --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       --font-mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
     }
 
     *, *::before, *::after { box-sizing: border-box; }
-    html { font-family: var(--font-sans); color: var(--text); background: var(--bg); scroll-behavior: smooth; }
+    html { color: var(--text); background: var(--bg); font-family: var(--font-sans); scroll-behavior: smooth; }
     body { margin: 0; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     a { color: var(--lan); text-decoration: none; }
     a:hover { text-decoration: underline; }
     .shell { max-width: 1040px; margin: 0 auto; padding: 0 24px; }
 
     nav { display: flex; align-items: center; justify-content: space-between; padding: 32px 0 0; }
-    .brand { font-size: 20px; font-weight: 750; letter-spacing: -.03em; text-decoration: none; }
-    .brand:hover { text-decoration: none; }
     .brand img { display: block; width: 128px; height: auto; }
     .nav-links { display: flex; align-items: center; gap: 20px; }
     .nav-links a:not(.gh-star) { color: var(--muted); font-size: 14px; font-weight: 500; }
     .nav-links a.active { color: var(--ink); font-weight: 650; }
     .nav-links a:not(.gh-star):hover { color: var(--ink); text-decoration: none; }
-    .gh-star { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 5px 12px; text-decoration: none; transition: border-color 0.15s; }
-    .gh-star:hover { border-color: var(--muted); text-decoration: none; color: var(--ink); }
+    .gh-star { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); font-size: 13px; font-weight: 600; text-decoration: none; }
+    .gh-star:hover { border-color: var(--muted); color: var(--ink); text-decoration: none; }
     .gh-star svg { width: 15px; height: 15px; fill: currentColor; }
 
     header { padding: 72px 0 64px; }
     h1, h2, h3, p { margin-top: 0; }
     h1 { max-width: 680px; margin-bottom: 16px; color: var(--ink); font-size: clamp(40px, 7vw, 58px); font-weight: 750; line-height: 1.04; letter-spacing: -.045em; }
-    .lede { max-width: 620px; margin-bottom: 24px; color: var(--muted); font-size: 18px; line-height: 1.65; }
+    .lede { max-width: 650px; margin-bottom: 24px; color: var(--muted); font-size: 18px; line-height: 1.65; }
     .build-version { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 20px; padding: 7px 11px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); font-family: var(--font-mono); font-size: 13px; font-weight: 650; }
     .build-version-label { color: var(--muted); font-family: var(--font-sans); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
-    .build-version a { color: inherit; text-decoration: underline; text-decoration-color: var(--subtle); text-underline-offset: 3px; }
-    .build-version a:hover { color: var(--lan); text-decoration-color: currentColor; }
     .state { display: inline-flex; align-items: center; gap: 9px; padding: 8px 12px; border-radius: 999px; background: var(--cert-soft); color: #376a57; font-size: 14px; font-weight: 650; }
     .state::before { width: 8px; height: 8px; border-radius: 50%; background: currentColor; content: ""; }
     .state.limited { color: var(--warning); background: var(--warning-soft); }
-    .state.unavailable { color: var(--danger); background: var(--danger-soft); }
     .status-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
     .updated { margin: 0; color: var(--muted); font-size: 13px; }
     .notice { margin: 24px 0 0; max-width: 760px; padding: 14px 16px; border-left: 3px solid var(--warning); border-radius: 0 8px 8px 0; background: var(--warning-soft); color: #6e5426; }
-    .operations { display: grid; max-width: 760px; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 20px; }
-    .operation { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font-size: 13px; font-weight: 650; }
-    .operation span { color: #376a57; }
-    .operation.suspended span { color: var(--warning); }
 
     section { padding: 48px 0; border-top: 1px solid var(--line); }
     .section-heading { display: grid; grid-template-columns: minmax(180px, 1fr) 2fr; gap: 32px; margin-bottom: 24px; }
     h2 { margin-bottom: 0; color: var(--ink); font-size: 22px; letter-spacing: -.025em; }
     .section-heading p { margin-bottom: 0; color: var(--muted); }
-    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+    .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
     .card { min-height: 154px; padding: 24px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
     .card-label { margin-bottom: 12px; color: var(--muted); font-size: 13px; font-weight: 650; }
     .value { margin-bottom: 5px; color: var(--ink); font-size: clamp(26px, 4vw, 36px); font-weight: 740; line-height: 1.1; letter-spacing: -.035em; }
@@ -73,93 +74,73 @@
     .chart-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
     .chart-header h3 { margin: 0 0 4px; color: var(--ink); font-size: 15px; }
     .chart-header p { margin: 0; color: var(--muted); font-size: 13px; }
-    .chart-peak { flex: 0 0 auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-    .lookup-chart { margin-top: 22px; }
-    .lookup-plot { position: relative; height: 160px; }
-    .lookup-gridline { position: absolute; right: 0; left: 0; height: 1px; background: var(--line); pointer-events: none; }
-    .lookup-gridline:first-child { top: 0; }
-    .lookup-gridline:nth-child(2) { top: 50%; }
-    .lookup-gridline:nth-child(3) { bottom: 0; }
-    .lookup-bars { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(30, minmax(0, 1fr)); gap: 9px; align-items: end; }
-    .lookup-bar-column { --bar-height: 0%; position: relative; display: flex; align-items: flex-end; justify-content: center; height: 100%; min-width: 0; border-radius: 3px; outline: none; cursor: default; }
-    .lookup-bar-column::after { width: 100%; height: var(--bar-height); min-height: 0; border-radius: 3px 3px 1px 1px; background: var(--lan); opacity: .82; content: ""; transition: opacity .15s, filter .15s; }
-    .lookup-bar-column:hover::after, .lookup-bar-column:focus-visible::after { opacity: 1; filter: saturate(1.15); }
-    .lookup-bar-column:focus-visible { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--lan); }
-    .lookup-tooltip { position: absolute; z-index: 2; bottom: calc(var(--bar-height) + 8px); left: 50%; width: max-content; max-width: 180px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--ink); color: var(--bg); font-size: 12px; line-height: 1.35; text-align: left; white-space: nowrap; opacity: 0; pointer-events: none; transform: translate(-50%, 4px); transition: opacity .12s, transform .12s; }
-    .lookup-tooltip strong { display: block; color: inherit; font-size: 12px; }
-    .lookup-bar-column:hover .lookup-tooltip, .lookup-bar-column:focus-visible .lookup-tooltip { opacity: 1; transform: translate(-50%, 0); }
-    .lookup-bar-column:first-child .lookup-tooltip { left: 0; transform: translate(0, 4px); }
-    .lookup-bar-column:first-child:hover .lookup-tooltip, .lookup-bar-column:first-child:focus-visible .lookup-tooltip { transform: translate(0, 0); }
-    .lookup-bar-column:last-child .lookup-tooltip { right: 0; left: auto; transform: translate(0, 4px); }
-    .lookup-bar-column:last-child:hover .lookup-tooltip, .lookup-bar-column:last-child:focus-visible .lookup-tooltip { transform: translate(0, 0); }
+    .chart-total { flex: 0 0 auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+    .bar-chart { margin-top: 22px; }
+    .bar-plot { position: relative; height: 160px; }
+    .gridline { position: absolute; right: 0; left: 0; height: 1px; background: var(--line); pointer-events: none; }
+    .gridline:first-child { top: 0; }
+    .gridline:nth-child(2) { top: 50%; }
+    .gridline:nth-child(3) { bottom: 0; }
+    .bars { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(30, minmax(0, 1fr)); gap: 9px; align-items: end; }
+    .bar { --bar-height: 0%; position: relative; display: flex; align-items: flex-end; justify-content: center; height: 100%; min-width: 0; border-radius: 3px; outline: none; }
+    .bar::after { width: 100%; height: var(--bar-height); border-radius: 3px 3px 1px 1px; background: var(--lan); opacity: .82; content: ""; }
+    .bar:hover::after, .bar:focus-visible::after { opacity: 1; }
+    .bar:focus-visible { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--lan); }
+    .tooltip { position: absolute; z-index: 2; bottom: calc(var(--bar-height) + 8px); left: 50%; width: max-content; padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--ink); color: var(--bg); font-size: 12px; line-height: 1.35; white-space: nowrap; opacity: 0; pointer-events: none; transform: translate(-50%, 4px); }
+    .tooltip strong { display: block; }
+    .bar:hover .tooltip, .bar:focus-visible .tooltip { opacity: 1; transform: translate(-50%, 0); }
+    .bar:first-child .tooltip { left: 0; transform: translate(0, 4px); }
+    .bar:first-child:hover .tooltip, .bar:first-child:focus-visible .tooltip { transform: translate(0, 0); }
+    .bar:last-child .tooltip { right: 0; left: auto; transform: translate(0, 4px); }
+    .bar:last-child:hover .tooltip, .bar:last-child:focus-visible .tooltip { transform: translate(0, 0); }
     .chart-axis { display: flex; justify-content: space-between; margin-top: 8px; color: var(--muted); font-size: 11px; }
-    .chart-panel > .empty { margin-top: 20px; }
 
-    .block-chart { display: grid; gap: 18px; margin-top: 24px; }
-    .block-chart-row { display: grid; grid-template-columns: 150px minmax(0, 1fr) 130px; align-items: center; gap: 16px; }
+    .block-chart { display: grid; gap: 18px; padding: 24px; border: 1px solid var(--line); border-radius: 10px; }
+    .block-chart-row { display: grid; grid-template-columns: 150px minmax(0, 1fr) 160px; align-items: center; gap: 16px; }
     .block-chart-label { color: var(--ink); font-family: var(--font-mono); font-size: 13px; font-weight: 650; }
     .block-chart-track { height: 12px; overflow: hidden; border-radius: 99px; background: var(--lan-soft); }
-    .block-chart-fill { display: block; height: 100%; min-width: 2px; border-radius: inherit; background: var(--lan); opacity: .82; }
+    .block-chart-fill { display: block; height: 100%; border-radius: inherit; background: var(--lan); opacity: .82; }
     .block-chart-value { color: var(--muted); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
     .block-chart-value strong { color: var(--ink); font-size: 13px; }
 
-    progress { width: 100%; height: 5px; margin-top: 18px; border: 0; border-radius: 99px; overflow: hidden; background: var(--line); }
-    progress::-webkit-progress-bar { background: var(--line); }
-    progress::-webkit-progress-value { background: var(--cert); border-radius: 99px; }
-    progress::-moz-progress-bar { background: var(--cert); border-radius: 99px; }
-
-    .certificate-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-    .ari-panel { margin-top: 12px; }
-    .ari-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
-    .ari-header h3 { margin-bottom: 3px; }
-    .ari-header p { margin: 0; color: var(--muted); font-size: 13px; }
-    .ari-value { flex: 0 0 auto; text-align: right; }
-    .ari-value strong { display: block; color: var(--ink); font-size: 22px; line-height: 1.2; letter-spacing: -.025em; }
-    .ari-value span { color: var(--muted); font-size: 12px; }
-    .ari-panel progress { margin-top: 16px; }
-    .traffic-details { margin-top: 12px; }
-
-    details { border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
-    summary { padding: 18px 22px; color: var(--ink); cursor: pointer; font-size: 14px; font-weight: 650; }
-    summary::marker { color: var(--muted); }
-    .details-body { padding: 0 22px 22px; }
-    .tables { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; }
+    .tables { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; margin-top: 28px; }
     h3 { margin-bottom: 6px; color: var(--ink); font-size: 15px; }
     .table-note { min-height: 42px; margin-bottom: 12px; color: var(--muted); font-size: 13px; }
     .table-wrap { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
     th, td { padding: 9px 0; border-bottom: 1px solid var(--line); text-align: left; }
     th { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
-    th:last-child, td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
-    code { font-family: var(--font-mono); font-size: 12px; color: var(--cert); background: var(--surface); border: 1px solid var(--line); padding: 2px 6px; border-radius: 4px; }
+    th.numeric, td.numeric { padding-left: 16px; text-align: right; font-variant-numeric: tabular-nums; }
+    code { padding: 2px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--cert); font-family: var(--font-mono); font-size: 12px; }
     .empty { margin: 0; padding: 18px; border-radius: 8px; background: var(--surface); color: var(--muted); font-size: 13px; }
-    .other { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
 
     footer { padding: 28px 0 52px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
     footer p { margin-bottom: 6px; }
 
+    @media (max-width: 900px) {
+      .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
     @media (max-width: 760px) {
       .shell { padding: 0 20px; }
       nav { align-items: flex-start; gap: 16px; }
       .nav-links { flex-wrap: wrap; gap: 12px 16px; }
       header { padding: 56px 0 48px; }
       h1 { font-size: 38px; }
-      .section-heading { grid-template-columns: 1fr; gap: 8px; }
-      .cards, .tables { grid-template-columns: 1fr; }
-      .certificate-cards { grid-template-columns: 1fr; }
+      .section-heading, .cards, .tables { grid-template-columns: 1fr; }
+      .section-heading { gap: 8px; }
       .card { min-height: 0; }
-      .ari-header { align-items: flex-start; flex-direction: column; gap: 12px; }
-      .ari-value { text-align: left; }
       .chart-panel { padding: 20px; }
-      .lookup-plot { height: 140px; }
-      .lookup-bars { gap: 5px; }
+      .bar-plot { height: 140px; }
+      .bars { gap: 5px; }
       .block-chart-row { grid-template-columns: 1fr auto; gap: 7px 12px; }
       .block-chart-track { grid-column: 1 / -1; grid-row: 2; }
       .table-note { min-height: 0; }
-      .status-summary { align-items: flex-start; flex-direction: column; gap: 8px; }
-      .operations { grid-template-columns: 1fr; }
     }
-  </style></head><body><div class="shell"><nav aria-label="Main navigation">
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <nav aria-label="Main navigation">
       <a class="brand" href="/" aria-label="lancert home"><img src="/assets/lancert-logo.svg" alt="lancert"></a>
       <div class="nav-links">
         <a href="/docs">Docs</a>
@@ -169,8 +150,85 @@
           Star on GitHub
         </a>
       </div>
-    </nav><main><header><h1>lancert status</h1><p class="lede">ACME activity and authoritative DNS response quality for private-network hostnames.</p><div class="build-version"><span class="build-version-label">Version</span><span>{{.Version}} ({{.Commit}})</span></div><div class="status-summary">{{if eq .Status "operational"}}<span class="state">Service operational</span>{{else}}<span class="state limited">Service degraded</span>{{end}}{{if not .Metrics.UpdatedAt.IsZero}}<p class="updated">Metrics updated {{.Metrics.UpdatedAt}}</p>{{end}}</div>{{if not .Metrics.Available}}<p class="notice">Aggregate metrics are currently unavailable. Authoritative DNS and registration state operate independently.</p>{{end}}</header>
-<section><div class="section-heading"><h2>Service activity</h2><p>Recent ACME and authoritative DNS activity.</p></div><div class="cards"><article class="card"><div class="card-label">DNS queries</div><div class="value">{{.Metrics.Queries24H}}</div><p class="context">Last 24 hours</p></article><article class="card"><div class="card-label">Response time</div><div class="value">{{printf "%.2f" .Metrics.ResponseP95MS}} ms</div><p class="context">95% of responses · Last 24 hours</p></article><article class="card"><div class="card-label">ACME-active registrations</div><div class="value">{{.Metrics.ACMEActiveRegistrations30D}}</div><p class="context">Accepted DNS-01 updates · Last 30 days</p></article></div><div class="chart-panel"><div class="chart-header"><div><h3>DNS response latency</h3><p>Current 95th-percentile authoritative response time.</p></div><div class="chart-peak">{{printf "%.2f" .Metrics.ResponseP95MS}} ms</div></div></div><div class="table-wrap"><table><thead><tr><th>Window</th><th>Activity</th></tr></thead><tbody><tr><td>Last 24 hours</td><td>{{.Metrics.Queries24H}} DNS queries</td></tr><tr><td>Last 30 days</td><td>{{.Metrics.ACMEActiveRegistrations30D}} registrations with accepted DNS-01 updates</td></tr></tbody></table></div></section></main><footer>
+    </nav>
+    <main>
+      <header>
+        <h1>lancert status</h1>
+        <p class="lede">How Lancert is used across its hostnames and private networks.</p>
+        <div class="build-version"><span class="build-version-label">Version</span><span>{{.Version}} ({{.Commit}})</span></div>
+        <div class="status-summary">
+          {{if eq .Status "operational"}}<span class="state">Service operational</span>{{else}}<span class="state limited">Service degraded</span>{{end}}
+          {{if not .MetricsUpdatedAt.IsZero}}<p class="updated">Metrics updated {{.MetricsUpdatedAt.Format "2 Jan 2006 15:04 UTC"}}</p>{{end}}
+        </div>
+        {{if or (not .UsageAvailable) (not .MetricsAvailable)}}<p class="notice">Some aggregate usage data is currently unavailable. Registration and authoritative DNS continue to operate independently.</p>{{end}}
+      </header>
+
+      {{if .UsageAvailable}}
+      <section>
+        <div class="section-heading">
+          <h2>Service usage</h2>
+          <p>Hostname creation and DNS-01 activity.</p>
+        </div>
+        <div class="cards">
+          <article class="card"><div class="card-label">Hostnames created</div><div class="value">{{.Usage.Hostnames}}</div><p class="context">Successful hostname requests</p></article>
+          <article class="card"><div class="card-label">Private IP addresses</div><div class="value">{{.Usage.PrivateIPs}}</div><p class="context">Unique private IPv4 addresses</p></article>
+          <article class="card"><div class="card-label">DNS-01 active hostnames</div><div class="value">{{.Usage.ACMEActiveHostnames}}</div><p class="context">At least one accepted update</p></article>
+          <article class="card"><div class="card-label">DNS queries</div><div class="value">{{if .MetricsAvailable}}{{.RegisteredQueriesTotal}}{{else}}—{{end}}</div><p class="context">Queries for existing hostnames only</p></article>
+        </div>
+        <div class="chart-panel">
+          <div class="chart-header"><div><h3>New hostnames</h3><p>Successful registrations over the last 30 days.</p></div></div>
+          <div class="bar-chart" role="img" aria-label="Daily hostname registrations over the last 30 days">
+            <div class="bar-plot"><span class="gridline"></span><span class="gridline"></span><span class="gridline"></span><div class="bars">
+              {{range .RegistrationChart}}<div class="bar" style="--bar-height: {{.Height}}%" tabindex="0" aria-label="{{.Label}}: {{.Hostnames}} hostnames, {{.PrivateIPs}} new private IPs"><span class="tooltip"><strong>{{.Label}}</strong>{{.Hostnames}} hostnames · {{.PrivateIPs}} new IPs</span></div>{{end}}
+            </div></div>
+            <div class="chart-axis"><span>{{(index .RegistrationChart 0).Label}}</span><span>{{(index .RegistrationChart 29).Label}}</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-heading">
+          <h2>Private network usage</h2>
+          <p>Requested private IPv4 addresses grouped by address range and local network. Repeated registrations remain visible.</p>
+        </div>
+        <div class="block-chart" role="img" aria-label="Hostname registrations by private IPv4 address range">
+          {{range .AddressBlocks}}<div class="block-chart-row"><span class="block-chart-label">{{.Network}}</span><span class="block-chart-track"><span class="block-chart-fill" style="width: {{.Width}}%"></span></span><span class="block-chart-value"><strong>{{.Hostnames}}</strong> hostnames · {{.PrivateIPs}} IPs</span></div>{{end}}
+        </div>
+        <div class="tables">
+          <div><h3>Local network ranges</h3><p class="table-note">The most requested /24 networks.</p>{{if .TopPrefixes}}<div class="table-wrap"><table><thead><tr><th>Network</th><th class="numeric">Hostnames</th><th class="numeric">IPs</th></tr></thead><tbody>{{range .TopPrefixes}}<tr><td><code>{{.Network}}</code></td><td class="numeric">{{.Hostnames}}</td><td class="numeric">{{.PrivateIPs}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="empty">No registrations yet.</p>{{end}}</div>
+          <div><h3>Private IP addresses</h3><p class="table-note">The most requested addresses and their DNS-01 activity.</p>{{if .TopIPs}}<div class="table-wrap"><table><thead><tr><th>Address</th><th class="numeric">Hostnames</th><th class="numeric">DNS-01 active</th></tr></thead><tbody>{{range .TopIPs}}<tr><td><code>{{.IP}}</code></td><td class="numeric">{{.Hostnames}}</td><td class="numeric">{{.ACMEActiveHostnames}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="empty">No registrations yet.</p>{{end}}</div>
+        </div>
+      </section>
+      {{end}}
+
+      {{if .MetricsAvailable}}
+      <section>
+        <div class="section-heading">
+          <h2>DNS activity</h2>
+          <p>Authoritative queries for existing Lancert hostnames. Queries for unknown names, scans, and other zone traffic are excluded.</p>
+        </div>
+        <div class="chart-panel">
+          <div class="chart-header"><div><h3>DNS queries</h3><p>Daily queries over the last 30 days.</p></div><div class="chart-total">{{.RegisteredQueries30D}} queries</div></div>
+          <div class="bar-chart" role="img" aria-label="Daily DNS queries for existing Lancert hostnames over the last 30 days">
+            <div class="bar-plot"><span class="gridline"></span><span class="gridline"></span><span class="gridline"></span><div class="bars">
+              {{range .DNSChart}}<div class="bar" style="--bar-height: {{.Height}}%" tabindex="0" aria-label="{{.Label}}: {{.Queries}} DNS queries"><span class="tooltip"><strong>{{.Label}}</strong>{{.Queries}} queries</span></div>{{end}}
+            </div></div>
+            <div class="chart-axis"><span>{{(index .DNSChart 0).Label}}</span><span>{{(index .DNSChart 29).Label}}</span></div>
+          </div>
+        </div>
+        {{if .UsageAvailable}}
+        <div class="tables">
+          <div><h3>Queries by local network</h3><p class="table-note">The most active /24 networks over the last 30 days.</p>{{if .DNSPrefixes}}<div class="table-wrap"><table><thead><tr><th>Network</th><th class="numeric">DNS queries</th></tr></thead><tbody>{{range .DNSPrefixes}}<tr><td><code>{{.Network}}</code></td><td class="numeric">{{.DNSQueries30D}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="empty">No DNS queries for existing hostnames in the last 30 days.</p>{{end}}</div>
+          <div><h3>Queries by private IP</h3><p class="table-note">The most active private addresses over the last 30 days.</p>{{if .DNSIPs}}<div class="table-wrap"><table><thead><tr><th>Address</th><th class="numeric">DNS queries</th></tr></thead><tbody>{{range .DNSIPs}}<tr><td><code>{{.IP}}</code></td><td class="numeric">{{.DNSQueries30D}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="empty">No DNS queries for existing hostnames in the last 30 days.</p>{{end}}</div>
+        </div>
+        {{end}}
+      </section>
+      {{end}}
+    </main>
+    <footer>
       <p>The <a href="https://github.com/lucor/lancert/blob/main/LICENSE">lancert software is MIT-licensed</a>. The software and DNS service are provided “as is”, without warranty.</p>
-      <p>Certificate issuance and private-key storage remain entirely with each user's ACME client.</p>
-    </footer></div></body></html>
+      {{if not .Usage.Since.IsZero}}<p>Usage statistics since {{.Usage.Since.Format "2 January 2006"}}.</p>{{end}}
+    </footer>
+  </div>
+</body>
+</html>

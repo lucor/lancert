@@ -36,6 +36,9 @@ func TestPersistenceUTCAndP95(t *testing.T) {
 	require.Equal(t, 100*time.Millisecond, snap.ResponseP95)
 	require.Len(t, snap.DailyLookups, 30)
 	require.Equal(t, DailyLookup{Date: "2026-07-21", Queries: 20}, snap.DailyLookups[29])
+	require.Equal(t, uint64(20), snap.RegisteredQueries30D)
+	require.Equal(t, uint64(20), snap.RegisteredQueriesTotal)
+	require.Equal(t, []RegistrationLookup{{RegistrationID: "registration-1", Queries: 20}}, snap.RegistrationLookups30D)
 	require.Equal(t, uint64(1), snap.ActiveRegistrations30D)
 	require.Equal(t, uint64(1), snap.ACMEActiveRegistrations30D)
 	require.Equal(t, uint64(2), snap.ChallengeUpdates30D)
@@ -115,7 +118,8 @@ func TestQueriesAndResponsesAreIndependent(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "metrics.db"), WithClock(func() time.Time { return now }), WithoutBackground())
 	require.NoError(t, err)
 
-	// A TXT/no-registration message still records its sole write and latency.
+	// A query for an unknown owner still contributes to operational DNS totals.
+	s.RecordDNSQuery("")
 	s.RecordResponse(true, 2*time.Millisecond)
 	// One response containing two registered questions records two queries, but
 	// still only one response-write observation.
@@ -125,7 +129,9 @@ func TestQueriesAndResponsesAreIndependent(t *testing.T) {
 	require.NoError(t, s.Flush(context.Background()))
 	require.NoError(t, s.RebuildSnapshot(context.Background()))
 	snap := s.Snapshot()
-	require.Equal(t, uint64(2), snap.Queries24H)
+	require.Equal(t, uint64(3), snap.Queries24H)
+	require.Equal(t, uint64(2), snap.RegisteredQueries30D)
+	require.Equal(t, uint64(2), snap.RegisteredQueriesTotal)
 	require.Equal(t, uint64(2), snap.WriteAttempts24H)
 	require.Equal(t, uint64(1), snap.WriteSuccesses24H)
 	require.Equal(t, uint64(2), snap.ActiveRegistrations30D)

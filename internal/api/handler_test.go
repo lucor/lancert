@@ -44,6 +44,9 @@ func newTestAPI(t *testing.T) testAPI {
 	snapshot := func() metrics.Snapshot {
 		return metrics.Snapshot{
 			Queries24H:                 42,
+			RegisteredQueries30D:       42,
+			RegisteredQueriesTotal:     84,
+			DailyLookups:               []metrics.DailyLookup{{Date: "2026-07-30", Queries: 42}},
 			ACMEActiveRegistrations30D: 3,
 			ResponseP95:                1500 * time.Microsecond,
 			FreshAt:                    time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC),
@@ -203,7 +206,7 @@ func TestPublicPages(t *testing.T) {
 		{"/docs/cli", []string{"CLI Quickstart", "Install the CLI", "lancert 192.168.1.50", "Let’s Encrypt", "rate limits", "lancert renew", "Prefer another ACME client"}, nil},
 		{"/docs/acme-clients", []string{"Use your own ACME client", "Register the target IP", "one-time-secret", "Certbot", "Lego", "acme.sh", "Caddy", "Nginx", "Traefik", "Renew the certificate"}, nil},
 		{"/docs/api", []string{"api-reference", `data-url="/openapi.yaml"`, "Lancert v2"}, nil},
-		{"/status", []string{"lancert status", "Service activity", "ACME-active registrations", "42", "1.50 ms"}, map[string]string{"Accept": "text/html"}},
+		{"/status", []string{"lancert status", "Service usage", "Hostnames created", "Private IP addresses", "DNS-01 active hostnames", "DNS queries", "Private network usage", "DNS activity", "Queries by local network", "Queries by private IP", "84", "42"}, map[string]string{"Accept": "text/html"}},
 		{"/openapi.yaml", []string{"openapi: 3.1.0", "/register/{ip}", "/update"}, nil},
 	}
 	for _, test := range tests {
@@ -219,6 +222,15 @@ func TestPublicPages(t *testing.T) {
 		})
 	}
 	assert.Equal(t, http.StatusNotFound, perform(api.handler, http.MethodGet, "/docs/web-servers", nil, nil).Code)
+}
+
+func TestStatusShowsStatisticsSince(t *testing.T) {
+	api := newTestAPI(t)
+	register(t, api)
+
+	response := perform(api.handler, http.MethodGet, "/status", nil, map[string]string{"Accept": "text/html"})
+	require.Equal(t, http.StatusOK, response.Code)
+	assert.Contains(t, response.Body.String(), "Usage statistics since")
 }
 
 func TestAnalyticsOnlyOnCanonicalHost(t *testing.T) {
@@ -249,6 +261,56 @@ func TestAnalyticsOnlyOnCanonicalHost(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestUsageCharts(t *testing.T) {
+	now := time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC)
+	registrations, dns := usageCharts(
+		[]registration.DailyUsage{{Date: "2026-08-23", Hostnames: 2, PrivateIPs: 1}},
+		[]metrics.DailyLookup{{Date: "2026-08-24", Queries: 50}},
+		now,
+	)
+	require.Len(t, registrations, 30)
+	require.Len(t, dns, 30)
+	assert.Equal(t, usageChartPoint{Date: "2026-08-23", Label: "Aug 23", Hostnames: 2, PrivateIPs: 1, Height: 100}, registrations[28])
+	assert.Equal(t, usageChartPoint{Date: "2026-08-24", Label: "Aug 24", Queries: 50, Height: 100}, dns[29])
+}
+
+func TestUsageTablesAddRegisteredDNSQueries(t *testing.T) {
+	usage := registration.Usage{
+		Hostnames: 3,
+		RegistrationTargets: map[string]string{
+			"one":   "192.168.1.10",
+			"two":   "192.168.1.10",
+			"three": "10.42.0.1",
+		},
+		Prefixes: []registration.NetworkUsage{
+			{Network: "192.168.1.0/24", Hostnames: 2, PrivateIPs: 1},
+			{Network: "10.42.0.0/24", Hostnames: 1, PrivateIPs: 1},
+		},
+		IPs: []registration.PrivateIPUsage{
+			{IP: "192.168.1.10", Hostnames: 2, ACMEActiveHostnames: 1},
+			{IP: "10.42.0.1", Hostnames: 1, ACMEActiveHostnames: 1},
+		},
+	}
+	lookups := []metrics.RegistrationLookup{
+		{RegistrationID: "one", Queries: 20},
+		{RegistrationID: "two", Queries: 5},
+		{RegistrationID: "three", Queries: 50},
+		{RegistrationID: "removed", Queries: 100},
+	}
+
+	prefixes, ips, dnsPrefixes, dnsIPs := usageTables(usage, lookups, 10)
+	assert.Equal(t, []networkUsageView{
+		{NetworkUsage: usage.Prefixes[0], DNSQueries30D: 25, Width: 67},
+		{NetworkUsage: usage.Prefixes[1], DNSQueries30D: 50, Width: 34},
+	}, prefixes)
+	assert.Equal(t, []privateIPUsageView{
+		{PrivateIPUsage: usage.IPs[0], DNSQueries30D: 25},
+		{PrivateIPUsage: usage.IPs[1], DNSQueries30D: 50},
+	}, ips)
+	assert.Equal(t, []networkUsageView{prefixes[1], prefixes[0]}, dnsPrefixes)
+	assert.Equal(t, []privateIPUsageView{ips[1], ips[0]}, dnsIPs)
 }
 
 func TestReadinessLifecycleIsStickyDuringShutdown(t *testing.T) {

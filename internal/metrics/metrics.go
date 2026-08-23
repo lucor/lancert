@@ -40,10 +40,16 @@ func (Disabled) RecordDNSQuery(string)              {}
 func (Disabled) RecordChallengeUpdate(string)       {}
 func (Disabled) RecordResponse(bool, time.Duration) {}
 
-// DailyLookup is an aggregate count for one UTC date.
+// DailyLookup is the registered-host DNS query count for one UTC date.
 type DailyLookup struct {
 	Date    string
 	Queries uint64
+}
+
+// RegistrationLookup is the registered-host DNS query count for one registration.
+type RegistrationLookup struct {
+	RegistrationID string
+	Queries        uint64
 }
 
 // Snapshot is a point-in-time copy of the metrics used by status endpoints.
@@ -56,6 +62,9 @@ type Snapshot struct {
 	ResponseP95                time.Duration
 	ResponseP95Overflow        bool
 	DailyLookups               []DailyLookup
+	RegistrationLookups30D     []RegistrationLookup
+	RegisteredQueries30D       uint64
+	RegisteredQueriesTotal     uint64
 	ActiveRegistrations30D     uint64
 	ACMEActiveRegistrations30D uint64
 	ChallengeUpdates30D        uint64
@@ -383,8 +392,7 @@ func (s *Store) RebuildSnapshot(ctx context.Context) error {
 	}
 	out.ResponseP95, out.ResponseP95Overflow = percentile95(responseHist)
 	startDate, endDate := now.AddDate(0, 0, -29).Format("2006-01-02"), dateOf(now)
-	dailyEnd := dateOf(now.AddDate(0, 0, 1)) + "T00:00:00Z"
-	dailyRows, err := s.db.QueryContext(ctx, `SELECT substr(hour,1,10),sum(queries) FROM dns_hourly WHERE hour>=? AND hour<? GROUP BY substr(hour,1,10)`, startDate+"T00:00:00Z", dailyEnd)
+	dailyRows, err := s.db.QueryContext(ctx, `SELECT date,sum(dns_queries) FROM registration_activity_daily WHERE date BETWEEN ? AND ? GROUP BY date`, startDate, endDate)
 	if err != nil {
 		return s.snapshotError(err)
 	}
@@ -404,6 +412,25 @@ func (s *Store) RebuildSnapshot(ctx context.Context) error {
 	for day := now.AddDate(0, 0, -29); !day.After(now); day = day.AddDate(0, 0, 1) {
 		date := dateOf(day)
 		out.DailyLookups = append(out.DailyLookups, DailyLookup{Date: date, Queries: daily[date]})
+		out.RegisteredQueries30D += daily[date]
+	}
+	if err = s.db.QueryRowContext(ctx, `SELECT COALESCE(sum(dns_queries),0) FROM registration_activity_daily`).Scan(&out.RegisteredQueriesTotal); err != nil {
+		return s.snapshotError(err)
+	}
+	lookupRows, err := s.db.QueryContext(ctx, `SELECT registration_id,sum(dns_queries) FROM registration_activity_daily WHERE date BETWEEN ? AND ? GROUP BY registration_id`, startDate, endDate)
+	if err != nil {
+		return s.snapshotError(err)
+	}
+	for lookupRows.Next() {
+		var lookup RegistrationLookup
+		if err = lookupRows.Scan(&lookup.RegistrationID, &lookup.Queries); err != nil {
+			lookupRows.Close()
+			return s.snapshotError(err)
+		}
+		out.RegistrationLookups30D = append(out.RegistrationLookups30D, lookup)
+	}
+	if err = lookupRows.Close(); err != nil {
+		return s.snapshotError(err)
 	}
 	const activityQuery = `
 SELECT count(*),
@@ -486,6 +513,7 @@ func (s *Store) Snapshot() Snapshot {
 	defer s.snapMu.RUnlock()
 	r := s.snap
 	r.DailyLookups = append([]DailyLookup(nil), r.DailyLookups...)
+	r.RegistrationLookups30D = append([]RegistrationLookup(nil), r.RegistrationLookups30D...)
 	return r
 }
 

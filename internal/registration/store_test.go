@@ -138,6 +138,54 @@ func TestSchemaMigration(t *testing.T) {
 	assert.False(t, dirty)
 }
 
+func TestUsageStats(t *testing.T) {
+	now := time.Date(2026, time.August, 21, 12, 0, 0, 0, time.UTC)
+	s, err := Open(":memory:", WithClock(func() time.Time { return now }))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
+
+	first, err := s.Register(context.Background(), netip.MustParseAddr("192.168.1.10"))
+	require.NoError(t, err)
+	_, err = s.Register(context.Background(), netip.MustParseAddr("192.168.1.10"))
+	require.NoError(t, err)
+	require.NoError(t, updateChallenge(s, first.Username, first.Password, first.Hostname, challengeA))
+	now = now.AddDate(0, 0, 1)
+	_, err = s.Register(context.Background(), netip.MustParseAddr("10.42.0.1"))
+	require.NoError(t, err)
+	now = now.AddDate(0, 0, 1)
+	_, err = s.Register(context.Background(), netip.MustParseAddr("172.16.2.3"))
+	require.NoError(t, err)
+
+	usage, err := s.UsageStats(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, uint64(4), usage.Hostnames)
+	assert.Equal(t, uint64(3), usage.PrivateIPs)
+	assert.Equal(t, uint64(1), usage.ACMEActiveHostnames)
+	assert.Equal(t, time.Date(2026, time.August, 21, 12, 0, 0, 0, time.UTC), usage.Since)
+	assert.Len(t, usage.RegistrationTargets, 4)
+	assert.Equal(t, "192.168.1.10", usage.RegistrationTargets[first.ID])
+	assert.Equal(t, []DailyUsage{
+		{Date: "2026-08-21", Hostnames: 2, PrivateIPs: 1},
+		{Date: "2026-08-22", Hostnames: 1, PrivateIPs: 1},
+		{Date: "2026-08-23", Hostnames: 1, PrivateIPs: 1},
+	}, usage.Daily)
+	assert.Equal(t, []NetworkUsage{
+		{Network: "10.0.0.0/8", Hostnames: 1, PrivateIPs: 1},
+		{Network: "172.16.0.0/12", Hostnames: 1, PrivateIPs: 1},
+		{Network: "192.168.0.0/16", Hostnames: 2, PrivateIPs: 1},
+	}, usage.Blocks)
+	assert.Equal(t, []NetworkUsage{
+		{Network: "192.168.1.0/24", Hostnames: 2, PrivateIPs: 1},
+		{Network: "10.42.0.0/24", Hostnames: 1, PrivateIPs: 1},
+		{Network: "172.16.2.0/24", Hostnames: 1, PrivateIPs: 1},
+	}, usage.Prefixes)
+	assert.Equal(t, []PrivateIPUsage{
+		{IP: "192.168.1.10", Hostnames: 2, ACMEActiveHostnames: 1},
+		{IP: "10.42.0.1", Hostnames: 1},
+		{IP: "172.16.2.3", Hostnames: 1},
+	}, usage.IPs)
+}
+
 func TestRegisterAddsSuffixAfterPlainHostnameCollisions(t *testing.T) {
 	var suffixRequests int
 	hostnameGenerator := func(_ io.Reader, withSuffix bool) (string, error) {
