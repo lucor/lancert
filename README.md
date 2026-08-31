@@ -25,7 +25,7 @@ You can also install the CLI from source with
 
 The CLI currently uses Let's Encrypt by default. Let's Encrypt terms, policies,
 and rate limits apply. Run `lancert renew` regularly to renew locally managed
-certificates.
+certificates. Use `lancert list` to inspect all managed certificates.
 
 ## Use your own ACME client
 
