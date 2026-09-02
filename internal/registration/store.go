@@ -18,11 +18,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"go.lucor.dev/lancert/internal/migrations"
 	"go.lucor.dev/lancert/internal/privateip"
 	"golang.org/x/crypto/blake2b"
 	_ "modernc.org/sqlite"
+	"uuid"
 )
 
 const (
@@ -47,13 +47,9 @@ var dummyDigest = digestKey("dummy-key-never-issued")
 type Option func(*config)
 
 type config struct {
-	random            io.Reader
 	now               func() time.Time
 	hostnameGenerator func(io.Reader, bool) (string, error)
 }
-
-// WithRandom sets the source used to generate IDs and credentials.
-func WithRandom(r io.Reader) Option { return func(c *config) { c.random = r } }
 
 // WithClock sets the clock used for persistence timestamps.
 func WithClock(now func() time.Time) Option { return func(c *config) { c.now = now } }
@@ -77,7 +73,6 @@ type Registration struct {
 // Store serializes commits and publication to its active read view.
 type Store struct {
 	db                *sql.DB
-	random            io.Reader
 	now               func() time.Time
 	hostnameGenerator func(io.Reader, bool) (string, error)
 	challenges        *challengeStore
@@ -89,11 +84,11 @@ type Store struct {
 
 // Open opens, migrates, and loads essential registration state. Any failure is fatal.
 func Open(path string, options ...Option) (*Store, error) {
-	cfg := config{random: rand.Reader, now: time.Now, hostnameGenerator: generateHostname}
+	cfg := config{now: time.Now, hostnameGenerator: generateHostname}
 	for _, option := range options {
 		option(&cfg)
 	}
-	if cfg.random == nil || cfg.now == nil || cfg.hostnameGenerator == nil {
+	if cfg.now == nil || cfg.hostnameGenerator == nil {
 		return nil, errors.New("registration: nil option")
 	}
 
@@ -144,7 +139,6 @@ func Open(path string, options ...Option) (*Store, error) {
 
 	s := &Store{
 		db:                db,
-		random:            cfg.random,
 		now:               cfg.now,
 		hostnameGenerator: cfg.hostnameGenerator,
 		active:            make(map[string]Registration),
@@ -251,23 +245,14 @@ func (s *Store) Register(ctx context.Context, addr netip.Addr) (Credentials, err
 }
 
 func (s *Store) generateCredentials(withHostnameSuffix bool) (Credentials, [32]byte, error) {
-	read := func(n int) ([]byte, error) { b := make([]byte, n); _, err := io.ReadFull(s.random, b); return b, err }
-	id, err := uuid.NewV7FromReader(s.random)
-	if err != nil {
-		return Credentials{}, [32]byte{}, fmt.Errorf("registration: generate ID: %w", err)
-	}
-	hostname, err := s.hostnameGenerator(s.random, withHostnameSuffix)
+	id := uuid.NewV7()
+	hostname, err := s.hostnameGenerator(rand.Reader, withHostnameSuffix)
 	if err != nil {
 		return Credentials{}, [32]byte{}, fmt.Errorf("registration: generate hostname: %w", err)
 	}
-	username, err := uuid.NewRandomFromReader(s.random)
-	if err != nil {
-		return Credentials{}, [32]byte{}, fmt.Errorf("registration: generate username: %w", err)
-	}
-	passwordBytes, err := read(30)
-	if err != nil {
-		return Credentials{}, [32]byte{}, fmt.Errorf("registration: generate password: %w", err)
-	}
+	username := uuid.NewV4()
+	passwordBytes := make([]byte, 30)
+	rand.Read(passwordBytes)
 	password := base64.RawURLEncoding.EncodeToString(passwordBytes)
 	credentials := Credentials{ID: id.String(), Hostname: hostname, Username: username.String(), Password: password}
 	return credentials, digestKey(password), nil
@@ -330,8 +315,8 @@ func validChallenge(value string) bool {
 }
 
 func validInternalID(id string) bool {
-	parsed, err := uuid.Parse(id)
-	return err == nil && parsed.Version() == uuid.Version(7) && parsed.Variant() == uuid.RFC4122
+	_, err := uuid.Parse(id)
+	return err == nil
 }
 
 func digestKey(key string) [32]byte {

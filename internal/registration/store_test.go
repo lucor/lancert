@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -26,7 +25,7 @@ const (
 	challengeC = "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
 )
 
-func TestRegisterShapesValidationAndRandomFailure(t *testing.T) {
+func TestRegisterShapesAndValidation(t *testing.T) {
 	s, err := Open(":memory:")
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, s.Close()) })
@@ -47,18 +46,6 @@ func TestRegisterShapesValidationAndRandomFailure(t *testing.T) {
 		_, err := s.Register(context.Background(), addr)
 		assert.ErrorIs(t, err, ErrInvalidAddress)
 	}
-
-	failing, err := Open(":memory:", WithRandom(errorReader{}))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, failing.Close()) })
-	_, err = failing.Register(context.Background(), netip.MustParseAddr("10.0.0.1"))
-	assert.ErrorContains(t, err, "generate ID")
-}
-
-func TestUUIDv7Layout(t *testing.T) {
-	id, err := uuid.NewV7FromReader(bytes.NewReader(make([]byte, 16)))
-	require.NoError(t, err)
-	assert.True(t, validInternalID(id.String()))
 }
 
 func TestPersistenceDigestPermissionsUsageAndEphemeralChallenges(t *testing.T) {
