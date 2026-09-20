@@ -216,7 +216,7 @@ func TestPublicPages(t *testing.T) {
 		{"/docs/cli", []string{"CLI Quickstart", "Install the CLI", "brew install lucor/tap/lancert", "go install go.lucor.dev/lancert-cli/cmd/lancert@latest", "lancert 192.168.1.50", "Let’s Encrypt", "rate limits", "lancert renew", "Prefer another ACME client"}, nil},
 		{"/docs/acme-clients", []string{"Use your own ACME client", "Register the target IP", "one-time-secret", "Certbot", "Lego", "acme.sh", "Caddy", "Nginx", "Traefik", "Renew the certificate"}, nil},
 		{"/docs/api", []string{"api-reference", `data-url="/openapi.yaml"`, "Lancert v2"}, nil},
-		{"/status", []string{"lancert status", "Service usage", "Hostnames created", "Private IP addresses", "DNS-01 active hostnames", "DNS queries", "Private network usage", "DNS activity", "Queries by local network", "Queries by private IP", "ACME client activity", "Accepted DNS-01 updates", "lancert-cli", "84", "42"}, map[string]string{"Accept": "text/html"}},
+		{"/status", []string{"lancert status", "Adoption", "Registered hostnames", "Hostnames with DNS-01 activity", "Activation rate", "New hostnames", "Address patterns", "DNS activity", "Queries by local network", "Queries by private IP", "ACME client activity", "lancert-cli", "42"}, map[string]string{"Accept": "text/html"}},
 		{"/openapi.yaml", []string{"openapi: 3.1.0", "/register/{ip}", "/update"}, nil},
 	}
 	for _, test := range tests {
@@ -284,6 +284,22 @@ func TestUsageCharts(t *testing.T) {
 	require.Len(t, dns, 30)
 	assert.Equal(t, usageChartPoint{Date: "2026-08-23", Label: "Aug 23", Hostnames: 2, PrivateIPs: 1, Height: 100}, registrations[28])
 	assert.Equal(t, usageChartPoint{Date: "2026-08-24", Label: "Aug 24", Queries: 50, Height: 100}, dns[29])
+}
+
+func TestAdoptionSummary(t *testing.T) {
+	usage := registration.Usage{
+		Hostnames: 10, ACMEActiveHostnames: 7,
+		Daily: []registration.DailyUsage{
+			{Date: "2026-08-22", Hostnames: 2},
+			{Date: "2026-09-14", Hostnames: 3},
+			{Date: "2026-09-20", Hostnames: 4},
+			{Date: "2026-09-21", Hostnames: 100},
+		},
+	}
+	rate, new7, new30 := adoptionSummary(usage, time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC))
+	assert.Equal(t, "70.0%", rate)
+	assert.Equal(t, uint64(7), new7)
+	assert.Equal(t, uint64(9), new30)
 }
 
 func TestUsageTablesAddRegisteredDNSQueries(t *testing.T) {

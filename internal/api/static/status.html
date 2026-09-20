@@ -166,14 +166,14 @@
       {{if .UsageAvailable}}
       <section>
         <div class="section-heading">
-          <h2>Service usage</h2>
-          <p>Hostname creation and DNS-01 activity.</p>
+          <h2>Adoption</h2>
+          <p>Registration and DNS-01 activation across Lancert hostnames.</p>
         </div>
         <div class="cards">
-          <article class="card"><div class="card-label">Hostnames created</div><div class="value">{{.Usage.Hostnames}}</div><p class="context">Successful hostname requests</p></article>
-          <article class="card"><div class="card-label">Private IP addresses</div><div class="value">{{.Usage.PrivateIPs}}</div><p class="context">Unique private IPv4 addresses</p></article>
-          <article class="card"><div class="card-label">DNS-01 active hostnames</div><div class="value">{{.Usage.ACMEActiveHostnames}}</div><p class="context">At least one accepted update</p></article>
-          <article class="card"><div class="card-label">DNS queries</div><div class="value">{{if .MetricsAvailable}}{{.RegisteredQueriesTotal}}{{else}}—{{end}}</div><p class="context">Queries for existing hostnames only</p></article>
+          <article class="card"><div class="card-label">Registered hostnames</div><div class="value">{{.Usage.Hostnames}}</div><p class="context">Successful hostname requests</p></article>
+          <article class="card"><div class="card-label">Hostnames with DNS-01 activity</div><div class="value">{{.Usage.ACMEActiveHostnames}}</div><p class="context">At least one accepted update</p></article>
+          <article class="card"><div class="card-label">Activation rate</div><div class="value">{{.ActivationRate}}</div><p class="context">Registered hostnames with DNS-01 activity</p></article>
+          <article class="card"><div class="card-label">New hostnames</div><div class="value">{{.NewHostnames7D}}</div><p class="context">Last 7 days · {{.NewHostnames30D}} in 30 days</p></article>
         </div>
         <div class="chart-panel">
           <div class="chart-header"><div><h3>New hostnames</h3><p>Successful registrations over the last 30 days.</p></div></div>
@@ -186,26 +186,13 @@
         </div>
       </section>
 
-      <section>
-        <div class="section-heading">
-          <h2>Private network usage</h2>
-          <p>Requested private IPv4 addresses grouped by address range and local network. Repeated registrations remain visible.</p>
-        </div>
-        <div class="block-chart" role="img" aria-label="Hostname registrations by private IPv4 address range">
-          {{range .AddressBlocks}}<div class="block-chart-row"><span class="block-chart-label">{{.Network}}</span><span class="block-chart-track"><span class="block-chart-fill" style="width: {{.Width}}%"></span></span><span class="block-chart-value"><strong>{{.Hostnames}}</strong> hostnames · {{.PrivateIPs}} IPs</span></div>{{end}}
-        </div>
-        <div class="tables">
-          <div><h3>Local network ranges</h3><p class="table-note">The most requested /24 networks.</p>{{if .TopPrefixes}}<div class="table-wrap"><table><thead><tr><th>Network</th><th class="numeric">Hostnames</th><th class="numeric">IPs</th></tr></thead><tbody>{{range .TopPrefixes}}<tr><td><code>{{.Network}}</code></td><td class="numeric">{{.Hostnames}}</td><td class="numeric">{{.PrivateIPs}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="empty">No registrations yet.</p>{{end}}</div>
-          <div><h3>Private IP addresses</h3><p class="table-note">The most requested addresses and their DNS-01 activity.</p>{{if .TopIPs}}<div class="table-wrap"><table><thead><tr><th>Address</th><th class="numeric">Hostnames</th><th class="numeric">DNS-01 active</th></tr></thead><tbody>{{range .TopIPs}}<tr><td><code>{{.IP}}</code></td><td class="numeric">{{.Hostnames}}</td><td class="numeric">{{.ACMEActiveHostnames}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="empty">No registrations yet.</p>{{end}}</div>
-        </div>
-      </section>
       {{end}}
 
       {{if .MetricsAvailable}}
       <section>
         <div class="section-heading">
           <h2>DNS activity</h2>
-          <p>Authoritative queries for existing Lancert hostnames. Queries for unknown names, scans, and other zone traffic are excluded.</p>
+          <p>Authoritative queries whose owners map to existing Lancert hostnames. Unknown-name traffic is excluded.</p>
         </div>
         <div class="chart-panel">
           <div class="chart-header"><div><h3>DNS queries</h3><p>Daily queries over the last 30 days.</p></div><div class="chart-total">{{.RegisteredQueries30D}} queries</div></div>
@@ -232,6 +219,22 @@
           <p>Accepted DNS-01 updates by detected client family.</p>
         </div>
         <div class="table-wrap"><table><thead><tr><th>Client family</th><th class="numeric">Accepted updates</th></tr></thead><tbody>{{range .ClientFamilies}}<tr><td><code>{{.ClientFamily}}</code></td><td class="numeric">{{.AcceptedUpdates}}</td></tr>{{end}}</tbody></table></div>
+      </section>
+      {{end}}
+
+      {{if .UsageAvailable}}
+      <section>
+        <div class="section-heading">
+          <h2>Address patterns</h2>
+          <p>Requested private IPv4 ranges and addresses.</p>
+        </div>
+        <div class="block-chart" role="img" aria-label="Hostname registrations by private IPv4 address range">
+          {{range .AddressBlocks}}<div class="block-chart-row"><span class="block-chart-label">{{.Network}}</span><span class="block-chart-track"><span class="block-chart-fill" style="width: {{.Width}}%"></span></span><span class="block-chart-value"><strong>{{.Hostnames}}</strong> hostnames · {{.PrivateIPs}} IPs</span></div>{{end}}
+        </div>
+        <div class="tables">
+          <div><h3>Local network ranges</h3><p class="table-note">The most requested /24 networks.</p>{{if .TopPrefixes}}<div class="table-wrap"><table><thead><tr><th>Network</th><th class="numeric">Hostnames</th><th class="numeric">IPs</th></tr></thead><tbody>{{range .TopPrefixes}}<tr><td><code>{{.Network}}</code></td><td class="numeric">{{.Hostnames}}</td><td class="numeric">{{.PrivateIPs}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="empty">No registrations yet.</p>{{end}}</div>
+          <div><h3>Private IP addresses</h3><p class="table-note">The most requested addresses and their DNS-01 activity.</p>{{if .TopIPs}}<div class="table-wrap"><table><thead><tr><th>Address</th><th class="numeric">Hostnames</th><th class="numeric">DNS-01 active</th></tr></thead><tbody>{{range .TopIPs}}<tr><td><code>{{.IP}}</code></td><td class="numeric">{{.Hostnames}}</td><td class="numeric">{{.ACMEActiveHostnames}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="empty">No registrations yet.</p>{{end}}</div>
+        </div>
       </section>
       {{end}}
     </main>

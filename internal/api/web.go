@@ -2,6 +2,7 @@ package api
 
 import (
 	"embed"
+	"fmt"
 	"html/template"
 	"io/fs"
 	"log/slog"
@@ -53,24 +54,27 @@ type pageData struct {
 }
 
 type statusPageData struct {
-	Analytics              bool
-	Status                 string
-	Version                string
-	Commit                 string
-	UsageAvailable         bool
-	MetricsAvailable       bool
-	MetricsUpdatedAt       time.Time
-	Usage                  registration.Usage
-	RegistrationChart      []usageChartPoint
-	DNSChart               []usageChartPoint
-	AddressBlocks          []networkUsageView
-	TopPrefixes            []networkUsageView
-	TopIPs                 []privateIPUsageView
-	DNSPrefixes            []networkUsageView
-	DNSIPs                 []privateIPUsageView
-	ClientFamilies         []metrics.ClientFamilyActivity
-	RegisteredQueries30D   uint64
-	RegisteredQueriesTotal uint64
+	Analytics               bool
+	Status                  string
+	Version                 string
+	Commit                  string
+	UsageAvailable          bool
+	MetricsAvailable        bool
+	MetricsUpdatedAt        time.Time
+	Usage                   registration.Usage
+	RegistrationChart       []usageChartPoint
+	DNSChart                []usageChartPoint
+	AddressBlocks           []networkUsageView
+	TopPrefixes             []networkUsageView
+	TopIPs                  []privateIPUsageView
+	DNSPrefixes             []networkUsageView
+	DNSIPs                  []privateIPUsageView
+	ClientFamilies          []metrics.ClientFamilyActivity
+	ActivationRate          string
+	NewHostnames7D          uint64
+	NewHostnames30D         uint64
+	RegisteredQueries30D    uint64
+	RegisteredQueriesTotal  uint64
 }
 
 type usageChartPoint struct {
@@ -156,6 +160,7 @@ func (h *Handler) handleStatusPage(w http.ResponseWriter, r *http.Request) {
 		} else {
 			data.UsageAvailable = true
 			data.Usage = usage
+			data.ActivationRate, data.NewHostnames7D, data.NewHostnames30D = adoptionSummary(usage, snapshot.FreshAt)
 			data.RegistrationChart, data.DNSChart = usageCharts(usage.Daily, snapshot.DailyLookups, snapshot.FreshAt)
 			data.AddressBlocks = networkUsageViews(usage.Blocks, usage.Hostnames, nil)
 			data.TopPrefixes, data.TopIPs, data.DNSPrefixes, data.DNSIPs = usageTables(usage, snapshot.RegistrationLookups30D, 10)
@@ -166,6 +171,29 @@ func (h *Handler) handleStatusPage(w http.ResponseWriter, r *http.Request) {
 	if err := statusTemplate.Execute(w, data); err != nil {
 		slog.Error("render status page", "error", err)
 	}
+}
+
+func adoptionSummary(usage registration.Usage, now time.Time) (string, uint64, uint64) {
+	activationRate := "—"
+	if usage.Hostnames > 0 {
+		activationRate = fmt.Sprintf("%.1f%%", 100*float64(usage.ACMEActiveHostnames)/float64(usage.Hostnames))
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	start7 := now.UTC().AddDate(0, 0, -6).Format("2006-01-02")
+	start30 := now.UTC().AddDate(0, 0, -29).Format("2006-01-02")
+	end := now.UTC().Format("2006-01-02")
+	var new7, new30 uint64
+	for _, day := range usage.Daily {
+		if day.Date >= start30 && day.Date <= end {
+			new30 += day.Hostnames
+		}
+		if day.Date >= start7 && day.Date <= end {
+			new7 += day.Hostnames
+		}
+	}
+	return activationRate, new7, new30
 }
 
 func usageCharts(registrations []registration.DailyUsage, lookups []metrics.DailyLookup, now time.Time) ([]usageChartPoint, []usageChartPoint) {
