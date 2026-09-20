@@ -1,6 +1,12 @@
 package metrics
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
+
+const maxStoredUserAgentBytes = 512
 
 // ClientFamily is a bounded client classification derived from an HTTP User-Agent.
 type ClientFamily string
@@ -78,4 +84,24 @@ func normalizeClientFamily(family ClientFamily) ClientFamily {
 	default:
 		return ClientFamilyOther
 	}
+}
+
+// storedUserAgent makes a User-Agent safe for bounded diagnostic storage.
+// Classification must use the original value, not this representation.
+func storedUserAgent(userAgent string) string {
+	userAgent = strings.ToValidUTF8(userAgent, "\uFFFD")
+	userAgent = strings.Map(func(value rune) rune {
+		if unicode.IsControl(value) {
+			return ' '
+		}
+		return value
+	}, userAgent)
+	if len(userAgent) <= maxStoredUserAgentBytes {
+		return userAgent
+	}
+	end := maxStoredUserAgentBytes
+	for !utf8.ValidString(userAgent[:end]) {
+		end--
+	}
+	return userAgent[:end]
 }

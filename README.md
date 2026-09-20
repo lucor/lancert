@@ -102,8 +102,10 @@ LANCERT_IP_HASH_SALT="$(openssl rand -hex 32)" \
 
 `core.db` is essential and fail-closed. It must be stored on a durable private
 volume and backed up with a SQLite-consistent method. `metrics.db` is
-observational and fail-open. Lancert v2 does not migrate v1 data; deploy it with
-a new data volume.
+observational and fail-open. It includes bounded User-Agent diagnostics for
+authenticated, accepted DNS-01 updates; these values are not exposed by the
+status endpoints. Lancert v2 does not migrate v1 data; deploy it with a new data
+volume.
 
 See [`.env.example`](.env.example) for all environment variables and
 [`internal/api/openapi.yaml`](internal/api/openapi.yaml) for the HTTP contract.

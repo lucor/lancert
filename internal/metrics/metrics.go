@@ -29,16 +29,16 @@ const histogramLen = len(LatencyBounds) + 1
 // serving paths.
 type Recorder interface {
 	RecordDNSQuery(registrationID string)
-	RecordChallengeUpdate(registrationID string, clientFamily ClientFamily)
+	RecordChallengeUpdate(registrationID string, clientFamily ClientFamily, userAgent string)
 	RecordResponse(writeSucceeded bool, latency time.Duration)
 }
 
 // Disabled is a fail-open recorder. It intentionally discards every event.
 type Disabled struct{}
 
-func (Disabled) RecordDNSQuery(string)                      {}
-func (Disabled) RecordChallengeUpdate(string, ClientFamily) {}
-func (Disabled) RecordResponse(bool, time.Duration)         {}
+func (Disabled) RecordDNSQuery(string)                              {}
+func (Disabled) RecordChallengeUpdate(string, ClientFamily, string) {}
+func (Disabled) RecordResponse(bool, time.Duration)                 {}
 
 // DailyLookup is the registered-host DNS query count for one UTC date.
 type DailyLookup struct {
@@ -120,17 +120,23 @@ type registrationActivity struct {
 	challengeUpdates uint64
 }
 
+type clientUserAgentObservation struct {
+	clientFamily ClientFamily
+	userAgent    string
+}
+
 // Store buffers aggregate observations in memory and persists them to SQLite.
 type Store struct {
 	db      *sql.DB
 	cfg     config
 	started time.Time
 
-	mu             sync.Mutex
-	pendingHourly  map[time.Time]aggregate
-	pendingDaily   map[string]map[string]registrationActivity
-	pendingClients map[string]map[ClientFamily]uint64
-	recent         [5]minuteBucket
+	mu                sync.Mutex
+	pendingHourly     map[time.Time]aggregate
+	pendingDaily      map[string]map[string]registrationActivity
+	pendingClients    map[string]map[ClientFamily]uint64
+	pendingUserAgents map[string]map[clientUserAgentObservation]uint64
+	recent            [5]minuteBucket
 
 	flushMu      sync.Mutex
 	snapMu       sync.RWMutex
@@ -177,7 +183,14 @@ func Open(path string, options ...Option) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("metrics: migrate: %w", err)
 	}
-	s := &Store{db: db, cfg: c, started: c.now().UTC(), pendingHourly: make(map[time.Time]aggregate), pendingDaily: make(map[string]map[string]registrationActivity), pendingClients: make(map[string]map[ClientFamily]uint64), stop: make(chan struct{}), done: make(chan struct{})}
+	s := &Store{
+		db: db, cfg: c, started: c.now().UTC(),
+		pendingHourly:     make(map[time.Time]aggregate),
+		pendingDaily:      make(map[string]map[string]registrationActivity),
+		pendingClients:    make(map[string]map[ClientFamily]uint64),
+		pendingUserAgents: make(map[string]map[clientUserAgentObservation]uint64),
+		stop:              make(chan struct{}), done: make(chan struct{}),
+	}
 	err = s.RebuildSnapshot(context.Background())
 	if err != nil {
 		db.Close()
@@ -237,7 +250,7 @@ func (s *Store) RecordDNSQuery(registrationID string) {
 }
 
 // RecordChallengeUpdate records one authenticated, accepted DNS-01 update.
-func (s *Store) RecordChallengeUpdate(registrationID string, clientFamily ClientFamily) {
+func (s *Store) RecordChallengeUpdate(registrationID string, clientFamily ClientFamily, userAgent string) {
 	if registrationID == "" {
 		return
 	}
@@ -253,6 +266,14 @@ func (s *Store) RecordChallengeUpdate(registrationID string, clientFamily Client
 		s.pendingClients[date] = make(map[ClientFamily]uint64)
 	}
 	s.pendingClients[date][clientFamily]++
+	if s.pendingUserAgents == nil {
+		s.pendingUserAgents = make(map[string]map[clientUserAgentObservation]uint64)
+	}
+	if s.pendingUserAgents[date] == nil {
+		s.pendingUserAgents[date] = make(map[clientUserAgentObservation]uint64)
+	}
+	observation := clientUserAgentObservation{clientFamily: clientFamily, userAgent: storedUserAgent(userAgent)}
+	s.pendingUserAgents[date][observation]++
 }
 
 func (s *Store) recordActivity(date, registrationID string, observation registrationActivity) {
@@ -322,10 +343,10 @@ func (s *Store) Flush(ctx context.Context) error {
 	s.flushMu.Lock()
 	defer s.flushMu.Unlock()
 	s.mu.Lock()
-	hours, days, clients := s.pendingHourly, s.pendingDaily, s.pendingClients
-	s.pendingHourly, s.pendingDaily, s.pendingClients = make(map[time.Time]aggregate), make(map[string]map[string]registrationActivity), make(map[string]map[ClientFamily]uint64)
+	hours, days, clients, userAgents := s.pendingHourly, s.pendingDaily, s.pendingClients, s.pendingUserAgents
+	s.pendingHourly, s.pendingDaily, s.pendingClients, s.pendingUserAgents = make(map[time.Time]aggregate), make(map[string]map[string]registrationActivity), make(map[string]map[ClientFamily]uint64), make(map[string]map[clientUserAgentObservation]uint64)
 	s.mu.Unlock()
-	err := s.flushBatch(ctx, hours, days, clients)
+	err := s.flushBatch(ctx, hours, days, clients, userAgents)
 	s.mu.Lock()
 	if err == nil {
 		s.lastFlushAt = s.cfg.now().UTC()
@@ -360,6 +381,14 @@ func (s *Store) Flush(ctx context.Context) error {
 				s.pendingClients[date][family] += updates
 			}
 		}
+		for date, observations := range userAgents {
+			if s.pendingUserAgents[date] == nil {
+				s.pendingUserAgents[date] = make(map[clientUserAgentObservation]uint64)
+			}
+			for observation, updates := range observations {
+				s.pendingUserAgents[date][observation] += updates
+			}
+		}
 		s.mu.Unlock()
 	}
 	return err
@@ -379,7 +408,7 @@ func addAggregate(a *aggregate, b aggregate) {
 	}
 }
 
-func (s *Store) flushBatch(ctx context.Context, hours map[time.Time]aggregate, days map[string]map[string]registrationActivity, clients map[string]map[ClientFamily]uint64) error {
+func (s *Store) flushBatch(ctx context.Context, hours map[time.Time]aggregate, days map[string]map[string]registrationActivity, clients map[string]map[ClientFamily]uint64, userAgents map[string]map[clientUserAgentObservation]uint64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -401,6 +430,13 @@ func (s *Store) flushBatch(ctx context.Context, hours map[time.Time]aggregate, d
 	for date, families := range clients {
 		for family, updates := range families {
 			if _, err = tx.ExecContext(ctx, `INSERT INTO client_activity_daily(date,client_family,accepted_updates) VALUES(?,?,?) ON CONFLICT(date,client_family) DO UPDATE SET accepted_updates=accepted_updates+excluded.accepted_updates`, date, family, updates); err != nil {
+				return err
+			}
+		}
+	}
+	for date, observations := range userAgents {
+		for observation, updates := range observations {
+			if _, err = tx.ExecContext(ctx, `INSERT INTO client_user_agent_daily(date,client_family,user_agent,accepted_updates) VALUES(?,?,?,?) ON CONFLICT(date,client_family,user_agent) DO UPDATE SET accepted_updates=accepted_updates+excluded.accepted_updates`, date, observation.clientFamily, observation.userAgent, updates); err != nil {
 				return err
 			}
 		}

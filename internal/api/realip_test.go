@@ -98,7 +98,7 @@ func TestRealIP_Resolve_MultipleXFFHeaders(t *testing.T) {
 		RemoteAddr: "172.20.0.2:12345",
 		Header:     http.Header{},
 	}
-	req.Header.Add("X-Forwarded-For", "1.1.1.1")    // spoofed by attacker
+	req.Header.Add("X-Forwarded-For", "1.1.1.1")     // spoofed by attacker
 	req.Header.Add("X-Forwarded-For", "95.12.34.56") // appended by proxy
 
 	got := rip.Resolve(req)

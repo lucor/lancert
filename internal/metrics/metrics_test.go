@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -25,8 +26,8 @@ func TestPersistenceUTCAndP95(t *testing.T) {
 		s.RecordDNSQuery("registration-1")
 		s.RecordResponse(false, 100*time.Millisecond)
 	}
-	s.RecordChallengeUpdate("registration-1", "acme.sh")
-	s.RecordChallengeUpdate("registration-1", "acme.sh")
+	s.RecordChallengeUpdate("registration-1", "acme.sh", "acme.sh/3.0.7")
+	s.RecordChallengeUpdate("registration-1", "acme.sh", "acme.sh/3.0.7")
 	require.NoError(t, s.Flush(context.Background()))
 	require.NoError(t, s.RebuildSnapshot(context.Background()))
 	snap := s.Snapshot()
@@ -111,7 +112,7 @@ func TestUnavailable(t *testing.T) {
 	require.True(t, snap.Unavailable)
 	var recorder Recorder = Disabled{}
 	recorder.RecordDNSQuery("")
-	recorder.RecordChallengeUpdate("", "")
+	recorder.RecordChallengeUpdate("", "", "")
 	recorder.RecordResponse(false, 0)
 }
 
@@ -164,8 +165,10 @@ func TestDatabaseModeAndPragmas(t *testing.T) {
 	var version int
 	var dirty bool
 	require.NoError(t, s.db.QueryRow(`SELECT version,dirty FROM schema_migrations`).Scan(&version, &dirty))
-	require.Equal(t, 2, version)
+	require.Equal(t, 3, version)
 	require.False(t, dirty)
+	_, err = s.db.Exec(`INSERT INTO client_user_agent_daily(date,client_family,user_agent,accepted_updates) VALUES('2026-07-21','other',?,1)`, strings.Repeat("a", maxStoredUserAgentBytes+1))
+	require.Error(t, err)
 	require.NoError(t, s.Close(context.Background()))
 }
 
@@ -196,7 +199,7 @@ func TestRegistrationActivityAccumulatesAfterReopen(t *testing.T) {
 
 	s := open()
 	s.RecordDNSQuery("registration-1")
-	s.RecordChallengeUpdate("registration-1", "acme.sh")
+	s.RecordChallengeUpdate("registration-1", "acme.sh", "acme.sh/3.0.7")
 	require.NoError(t, s.Close(context.Background()))
 
 	s = open()
@@ -222,10 +225,69 @@ func TestChallengeUpdateBoundsClientFamily(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "metrics.db"), WithClock(func() time.Time { return now }), WithoutBackground())
 	require.NoError(t, err)
 
-	s.RecordChallengeUpdate("registration-1", ClientFamily("unbounded-value"))
+	s.RecordChallengeUpdate("registration-1", ClientFamily("unbounded-value"), "custom-client/1.0")
 	require.NoError(t, s.Flush(context.Background()))
 	require.NoError(t, s.RebuildSnapshot(context.Background()))
 	require.Equal(t, []ClientFamilyActivity{{ClientFamily: ClientFamilyOther, AcceptedUpdates: 1}}, s.Snapshot().ClientFamilies)
+	require.NoError(t, s.Close(context.Background()))
+}
+
+func TestClientUserAgentActivity(t *testing.T) {
+	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
+	s, err := Open(filepath.Join(t.TempDir(), "metrics.db"), WithClock(func() time.Time { return now }), WithoutBackground())
+	require.NoError(t, err)
+
+	s.RecordChallengeUpdate("registration-1", ClientFamilyLego, "Lego/v4.21.0")
+	s.RecordChallengeUpdate("registration-1", ClientFamilyLego, "Lego/v4.21.0")
+	s.RecordChallengeUpdate("registration-2", ClientFamilyLego, "go-acme/lego/v4.21.0")
+	s.RecordChallengeUpdate("registration-3", ClientFamilyUnknown, "")
+	require.NoError(t, s.Flush(context.Background()))
+
+	rows, err := s.db.Query(`SELECT client_family,user_agent,accepted_updates FROM client_user_agent_daily ORDER BY client_family,user_agent`)
+	require.NoError(t, err)
+	defer rows.Close()
+	type activity struct {
+		family    string
+		userAgent string
+		updates   uint64
+	}
+	var activities []activity
+	for rows.Next() {
+		var item activity
+		require.NoError(t, rows.Scan(&item.family, &item.userAgent, &item.updates))
+		activities = append(activities, item)
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, []activity{
+		{family: "lego", userAgent: "Lego/v4.21.0", updates: 2},
+		{family: "lego", userAgent: "go-acme/lego/v4.21.0", updates: 1},
+		{family: "unknown", userAgent: "", updates: 1},
+	}, activities)
+
+	var legoUpdates uint64
+	require.NoError(t, s.db.QueryRow(`SELECT accepted_updates FROM client_activity_daily WHERE date='2026-07-21' AND client_family='lego'`).Scan(&legoUpdates))
+	require.Equal(t, uint64(3), legoUpdates)
+	require.NoError(t, s.Close(context.Background()))
+}
+
+func TestClientUserAgentFlushFailureRetriesBothAggregates(t *testing.T) {
+	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
+	s, err := Open(filepath.Join(t.TempDir(), "metrics.db"), WithClock(func() time.Time { return now }), WithoutBackground())
+	require.NoError(t, err)
+	_, err = s.db.Exec(`DROP TABLE client_user_agent_daily`)
+	require.NoError(t, err)
+
+	s.RecordChallengeUpdate("registration-1", ClientFamilyACMESh, "acme.sh/3.0.7")
+	require.Error(t, s.Flush(context.Background()))
+	_, err = s.db.Exec(`CREATE TABLE client_user_agent_daily (date TEXT NOT NULL, client_family TEXT NOT NULL, user_agent TEXT NOT NULL, accepted_updates INTEGER NOT NULL, PRIMARY KEY (date,client_family,user_agent))`)
+	require.NoError(t, err)
+	require.NoError(t, s.Flush(context.Background()))
+
+	var familyUpdates, userAgentUpdates uint64
+	require.NoError(t, s.db.QueryRow(`SELECT accepted_updates FROM client_activity_daily WHERE client_family='acme.sh'`).Scan(&familyUpdates))
+	require.NoError(t, s.db.QueryRow(`SELECT accepted_updates FROM client_user_agent_daily WHERE client_family='acme.sh'`).Scan(&userAgentUpdates))
+	require.Equal(t, uint64(1), familyUpdates)
+	require.Equal(t, uint64(1), userAgentUpdates)
 	require.NoError(t, s.Close(context.Background()))
 }
 
@@ -239,7 +301,7 @@ func BenchmarkRecordMethods(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		s.RecordDNSQuery("registration-1")
-		s.RecordChallengeUpdate("registration-1", "acme.sh")
+		s.RecordChallengeUpdate("registration-1", "acme.sh", "acme.sh/3.0.7")
 		s.RecordResponse(true, time.Millisecond)
 	}
 }

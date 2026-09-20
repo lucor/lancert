@@ -27,13 +27,15 @@ type testAPI struct {
 type testMetricsRecorder struct {
 	challengeUpdates []string
 	clientFamilies   []metrics.ClientFamily
+	userAgents       []string
 }
 
 func (*testMetricsRecorder) RecordDNSQuery(string) {}
 
-func (r *testMetricsRecorder) RecordChallengeUpdate(registrationID string, clientFamily metrics.ClientFamily) {
+func (r *testMetricsRecorder) RecordChallengeUpdate(registrationID string, clientFamily metrics.ClientFamily, userAgent string) {
 	r.challengeUpdates = append(r.challengeUpdates, registrationID)
 	r.clientFamilies = append(r.clientFamilies, clientFamily)
+	r.userAgents = append(r.userAgents, userAgent)
 }
 
 func (*testMetricsRecorder) RecordResponse(bool, time.Duration) {}
@@ -139,6 +141,7 @@ func TestAcmeDNSUpdateContract(t *testing.T) {
 	assert.Equal(t, testChallenge, state.Challenges[0])
 	assert.Equal(t, []string{state.ID}, api.recorder.challengeUpdates)
 	assert.Equal(t, []metrics.ClientFamily{metrics.ClientFamilyACMESh}, api.recorder.clientFamilies)
+	assert.Equal(t, []string{"acme.sh/3.0.7 (https://github.com/acmesh-official/acme.sh)"}, api.recorder.userAgents)
 }
 
 func TestUpdateAuthorizationAndValidationResponses(t *testing.T) {
@@ -174,6 +177,7 @@ func TestUpdateAuthorizationAndValidationResponses(t *testing.T) {
 	}
 	assert.Empty(t, api.recorder.challengeUpdates)
 	assert.Empty(t, api.recorder.clientFamilies)
+	assert.Empty(t, api.recorder.userAgents)
 }
 
 func TestHealthAndStatus(t *testing.T) {
