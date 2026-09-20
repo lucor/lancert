@@ -44,7 +44,14 @@ run = "go test ./..."
 [tasks.e2e]
 description = "Run the Lancert API and DNS lifecycle through Lego and Pebble"
 depends = ["setup"]
-run = "go test -tags=e2e -p 1 ./internal/api -run TestPebbleLego -count=1 -v"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+lego_bin="$(mise which lego)"
+pebble_bin="$(mise which pebble)"
+PATH="$(dirname "$lego_bin"):$(dirname "$pebble_bin"):$PATH" \
+  go test -tags=e2e -p 1 ./internal/api -run TestPebbleLego -count=1 -v
+"""
 
 [tasks.race]
 description = "Run all tests with the race detector"
