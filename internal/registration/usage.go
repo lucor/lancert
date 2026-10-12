@@ -157,6 +157,36 @@ func (s *Store) UsageStats(ctx context.Context) (Usage, error) {
 	return usage, nil
 }
 
+// CertificateRegistration is the public hostname needed to
+// associate a CT certificate with the registration lifecycle.
+type CertificateRegistration struct {
+	Hostname string
+}
+
+// CertificateRegistrations returns active registrations for matching CT names.
+// It excludes target addresses and API credentials by construction.
+func (s *Store) CertificateRegistrations(ctx context.Context) ([]CertificateRegistration, error) {
+	operationCtx, cancel := context.WithTimeout(ctx, operationTimeout)
+	defer cancel()
+	rows, err := s.db.QueryContext(operationCtx, `SELECT hostname FROM registrations WHERE status='active' ORDER BY hostname`)
+	if err != nil {
+		return nil, fmt.Errorf("registration: query certificate hostnames: %w", err)
+	}
+	defer rows.Close()
+	var registrations []CertificateRegistration
+	for rows.Next() {
+		var registration CertificateRegistration
+		if err := rows.Scan(&registration.Hostname); err != nil {
+			return nil, fmt.Errorf("registration: scan certificate hostname: %w", err)
+		}
+		registrations = append(registrations, registration)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("registration: read certificate hostnames: %w", err)
+	}
+	return registrations, nil
+}
+
 func privateBlock(addr netip.Addr) string {
 	for _, block := range privateBlocks {
 		if block.Contains(addr) {

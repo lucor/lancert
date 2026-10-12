@@ -1,0 +1,6 @@
+DROP TABLE sslmate_monitor_state;
+DROP INDEX sslmate_registration_issuances_hostname;
+DROP TABLE sslmate_registration_issuances;
+DROP INDEX sslmate_issuances_identifier_set;
+DROP INDEX sslmate_issuances_not_before;
+DROP TABLE sslmate_issuances;

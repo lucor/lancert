@@ -200,15 +200,35 @@ type statusResponse struct {
 }
 
 type statusMetrics struct {
-	Available                  bool      `json:"available"`
-	Queries24H                 uint64    `json:"queries_24h"`
-	ACMEActiveRegistrations30D uint64    `json:"acme_active_registrations_30d"`
-	ResponseP95MS              float64   `json:"response_p95_ms"`
-	UpdatedAt                  time.Time `json:"updated_at,omitempty"`
+	Available                    bool                 `json:"available"`
+	Queries24H                   uint64               `json:"queries_24h"`
+	ACMEActiveRegistrations30D   uint64               `json:"acme_active_registrations_30d"`
+	ResponseP95MS                float64              `json:"response_p95_ms"`
+	UpdatedAt                    time.Time            `json:"updated_at,omitempty"`
+	CertificateBootstrapComplete bool                 `json:"certificate_bootstrap_complete"`
+	CertificateHistorySince      *time.Time           `json:"certificate_history_since,omitempty"`
+	Certificates7D               uint64               `json:"lets_encrypt_certificates_7d"`
+	Reissued7D                   uint64               `json:"lets_encrypt_reissued_7d"`
+	LEAdoptedHostnames           uint64               `json:"lets_encrypt_adopted_hostnames"`
+	CertificatesByCA             []metrics.CAActivity `json:"certificates_by_ca,omitempty"`
+	Certificates30D              uint64               `json:"certificates_observed_30d"`
+	CertificatesTotal            uint64               `json:"certificates_observed_total"`
+	CertificateMonitorUpdated    *time.Time           `json:"certificate_monitor_updated_at,omitempty"`
+	CertificateMonitorDegraded   bool                 `json:"certificate_monitor_degraded"`
 }
 
 func (h *Handler) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	snapshot := h.snapshot()
+	var certificateMonitorUpdated *time.Time
+	if !snapshot.CertificateMonitorUpdatedAt.IsZero() {
+		updated := snapshot.CertificateMonitorUpdatedAt
+		certificateMonitorUpdated = &updated
+	}
+	var certificateHistorySince *time.Time
+	if !snapshot.CertificateHistorySince.IsZero() {
+		since := snapshot.CertificateHistorySince
+		certificateHistorySince = &since
+	}
 	status := "operational"
 	if !h.operational() || snapshot.Unavailable || snapshot.Degraded {
 		status = "degraded"
@@ -219,11 +239,21 @@ func (h *Handler) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		Commit:     h.build.CommitHash,
 		APIVersion: CompatibilityVersion,
 		Metrics: statusMetrics{
-			Available:                  !snapshot.Unavailable,
-			Queries24H:                 snapshot.Queries24H,
-			ACMEActiveRegistrations30D: snapshot.ACMEActiveRegistrations30D,
-			ResponseP95MS:              float64(snapshot.ResponseP95) / float64(time.Millisecond),
-			UpdatedAt:                  snapshot.FreshAt,
+			Available:                    !snapshot.Unavailable,
+			Queries24H:                   snapshot.Queries24H,
+			ACMEActiveRegistrations30D:   snapshot.ACMEActiveRegistrations30D,
+			ResponseP95MS:                float64(snapshot.ResponseP95) / float64(time.Millisecond),
+			UpdatedAt:                    snapshot.FreshAt,
+			CertificateBootstrapComplete: snapshot.CertificateBootstrapComplete,
+			CertificateHistorySince:      certificateHistorySince,
+			Certificates7D:               snapshot.Certificates7D,
+			Reissued7D:                   snapshot.Reissued7D,
+			LEAdoptedHostnames:           snapshot.LEAdoptedHostnames,
+			CertificatesByCA:             snapshot.CertificatesByCA,
+			Certificates30D:              snapshot.Certificates30D,
+			CertificatesTotal:            snapshot.CertificatesTotal,
+			CertificateMonitorUpdated:    certificateMonitorUpdated,
+			CertificateMonitorDegraded:   snapshot.CertificateMonitorError != "",
 		},
 	})
 }

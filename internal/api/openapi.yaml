@@ -204,6 +204,63 @@ components:
             response_p95_ms:
               type: number
               minimum: 0
+            certificate_bootstrap_complete:
+              type: boolean
+              description: Whether initial certificate discovery has completed; certificate counts are partial until then.
+            certificate_history_since:
+              type: string
+              format: date-time
+              description: Persisted lower bound of the monitored certificate history.
+            lets_encrypt_certificates_7d:
+              type: integer
+              minimum: 0
+              description: Distinct Let's Encrypt certificate issuances observed in the last seven days, including certificates later revoked.
+            lets_encrypt_reissued_7d:
+              type: integer
+              minimum: 0
+              description: Distinct Let's Encrypt certificates in the last seven days for which every associated hostname had an earlier observed Let's Encrypt issuance since monitoring began. This includes renewals and other reissuances.
+            lets_encrypt_adopted_hostnames:
+              type: integer
+              minimum: 0
+              description: Distinct registered hostnames with a non-revoked Let's Encrypt certificate since monitoring began.
+            certificates_by_ca:
+              type: array
+              description: Observed CT issuances grouped by certificate authority since monitoring began, including issuances later revoked.
+              items:
+                type: object
+                required: [issuer, issuances, reissued, revoked, hostnames]
+                properties:
+                  issuer:
+                    type: string
+                  issuances:
+                    type: integer
+                    minimum: 0
+                  reissued:
+                    type: integer
+                    minimum: 0
+                    description: Distinct certificates issued after an earlier issuance from this authority for every associated hostname since monitoring began.
+                  revoked:
+                    type: integer
+                    minimum: 0
+                    description: Issuances currently marked revoked by SSLMate.
+                  hostnames:
+                    type: integer
+                    minimum: 0
+            certificates_observed_30d:
+              type: integer
+              minimum: 0
+              description: Distinct Let's Encrypt certificate issuances observed in the last 30 days.
+            certificates_observed_total:
+              type: integer
+              minimum: 0
+              description: Unique Let's Encrypt certificates containing a Lancert hostname since monitoring began, including certificates later revoked.
+            certificate_monitor_updated_at:
+              type: string
+              format: date-time
+              description: Time of the last successful SSLMate certificate transparency poll.
+            certificate_monitor_degraded:
+              type: boolean
+              description: Whether the latest CT log poll encountered an error.
             updated_at:
               type: string
               format: date-time

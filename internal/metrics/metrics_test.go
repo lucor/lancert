@@ -57,6 +57,74 @@ func TestPersistenceUTCAndP95(t *testing.T) {
 	require.NoError(t, s.Close(context.Background()))
 }
 
+func TestSSLMateMetricsCountIssuedAndReissuedByAuthority(t *testing.T) {
+	now := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	s, err := Open(filepath.Join(t.TempDir(), "metrics.db"), WithClock(func() time.Time { return now }), WithoutBackground())
+	require.NoError(t, err)
+	require.NoError(t, s.InitializeSSLMate(context.Background(), time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC)))
+	add := func(tbs, issuer, hostname string, domains []string, at time.Time, revoked bool) {
+		event := CertificateIssuance{
+			TBS: tbs, Issuer: issuer, CAADomains: domains,
+			DNSNames:  []string{hostname + ".lancert.dev"},
+			NotBefore: at, NotAfter: at.Add(90 * 24 * time.Hour), Revoked: &revoked,
+			Registrations: []RegistrationIssuance{{Hostname: hostname}},
+		}
+		require.NoError(t, s.RecordSSLMatePage(context.Background(), []CertificateIssuance{event}, tbs, false))
+	}
+	leDomains := []string{"letsencrypt.org"}
+	add("baseline", "Let's Encrypt", "alpha", leDomains, time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC), false)
+	add("renewal", "Let's Encrypt", "alpha", leDomains, time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC), false)
+	add("new-set", "Let's Encrypt", "beta", leDomains, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), false)
+	add("revoked", "Let's Encrypt", "gamma", leDomains, time.Date(2026, 10, 1, 1, 0, 0, 0, time.UTC), true)
+	add("other-ca", "Example CA", "delta", []string{"example.test"}, time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC), false)
+	require.NoError(t, s.RebuildSnapshot(context.Background()))
+	snapshot := s.Snapshot()
+	require.Equal(t, uint64(3), snapshot.Certificates7D)
+	require.Equal(t, uint64(1), snapshot.Reissued7D)
+	require.Equal(t, uint64(4), snapshot.CertificatesTotal)
+	require.Equal(t, uint64(2), snapshot.LEAdoptedHostnames)
+	require.Equal(t, time.Date(2026, 8, 21, 0, 0, 0, 0, time.UTC), snapshot.CertificateHistorySince)
+	require.False(t, snapshot.CertificateBootstrapComplete)
+	require.Equal(t, []CAActivity{{Issuer: "Let's Encrypt", Issuances: 4, Reissued: 1, Revoked: 1, Hostnames: 3}, {Issuer: "Example CA", Issuances: 1, Reissued: 0, Revoked: 0, Hostnames: 1}}, snapshot.CertificatesByCA)
+	require.NoError(t, s.Close(context.Background()))
+}
+
+func TestSSLMateRevocationSnapshotUpdatesKnownIssuanceOnly(t *testing.T) {
+	now := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	s, err := Open(filepath.Join(t.TempDir(), "metrics.db"), WithClock(func() time.Time { return now }), WithoutBackground())
+	require.NoError(t, err)
+	require.NoError(t, s.InitializeSSLMate(context.Background(), time.Date(2026, 8, 21, 0, 0, 0, 0, time.UTC)))
+	notRevoked := false
+	issuanceAt := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, s.RecordSSLMatePage(context.Background(), []CertificateIssuance{{TBS: "known", Issuer: "Let's Encrypt", CAADomains: []string{"letsencrypt.org"}, DNSNames: []string{"alpha.lancert.dev"}, NotBefore: issuanceAt, NotAfter: issuanceAt.Add(90 * 24 * time.Hour), Revoked: &notRevoked, Registrations: []RegistrationIssuance{{Hostname: "alpha"}}}}, "1", true))
+	refreshAfter, due, err := s.SSLMateRevocationState(context.Background(), now)
+	require.NoError(t, err)
+	require.True(t, due)
+	require.Empty(t, refreshAfter)
+
+	revoked, revokedAt, checkedAt := true, now.Add(-time.Hour), now
+	require.NoError(t, s.RecordSSLMateRevocationPage(context.Background(), []CertificateIssuance{{TBS: "known", Revoked: &revoked, RevocationTime: &revokedAt, RevocationCheckedAt: &checkedAt}, {TBS: "not-stored", Revoked: &revoked}}, "1", false))
+	refreshAfter, due, err = s.SSLMateRevocationState(context.Background(), now)
+	require.NoError(t, err)
+	require.True(t, due)
+	require.Equal(t, "1", refreshAfter)
+
+	require.NoError(t, s.RecordSSLMateRevocationPage(context.Background(), nil, "", true))
+	refreshAfter, due, err = s.SSLMateRevocationState(context.Background(), now)
+	require.NoError(t, err)
+	require.False(t, due)
+	require.Empty(t, refreshAfter)
+	var storedRevoked, storedRevokedAt, storedCheckedAt int64
+	require.NoError(t, s.db.QueryRow(`SELECT revoked,revocation_time,revocation_checked_at FROM sslmate_issuances WHERE tbs_sha256='known'`).Scan(&storedRevoked, &storedRevokedAt, &storedCheckedAt))
+	require.Equal(t, int64(1), storedRevoked)
+	require.Equal(t, revokedAt.Unix(), storedRevokedAt)
+	require.Equal(t, checkedAt.Unix(), storedCheckedAt)
+	var associations int
+	require.NoError(t, s.db.QueryRow(`SELECT count(*) FROM sslmate_registration_issuances WHERE tbs_sha256='known'`).Scan(&associations))
+	require.Equal(t, 1, associations)
+	require.NoError(t, s.Close(context.Background()))
+}
+
 func TestDateOfNormalizesNonUTCTime(t *testing.T) {
 	local := time.Date(2026, 7, 21, 23, 30, 0, 0, time.FixedZone("local", 3600))
 	require.Equal(t, "2026-07-21", dateOf(local))
@@ -165,7 +233,7 @@ func TestDatabaseModeAndPragmas(t *testing.T) {
 	var version int
 	var dirty bool
 	require.NoError(t, s.db.QueryRow(`SELECT version,dirty FROM schema_migrations`).Scan(&version, &dirty))
-	require.Equal(t, 3, version)
+	require.Equal(t, 4, version)
 	require.False(t, dirty)
 	_, err = s.db.Exec(`INSERT INTO client_user_agent_daily(date,client_family,user_agent,accepted_updates) VALUES('2026-07-21','other',?,1)`, strings.Repeat("a", maxStoredUserAgentBytes+1))
 	require.Error(t, err)
@@ -304,4 +372,24 @@ func BenchmarkRecordMethods(b *testing.B) {
 		s.RecordChallengeUpdate("registration-1", "acme.sh", "acme.sh/3.0.7")
 		s.RecordResponse(true, time.Millisecond)
 	}
+}
+
+func TestCertificateThirtyDayWindow(t *testing.T) {
+	now := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	s, err := Open(filepath.Join(t.TempDir(), "metrics.db"), WithClock(func() time.Time { return now }), WithoutBackground())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, s.Close(context.Background())) })
+	require.NoError(t, s.InitializeSSLMate(context.Background(), now.Add(-31*24*time.Hour)))
+	for _, event := range []CertificateIssuance{
+		{TBS: "outside", NotBefore: now.Add(-30*24*time.Hour - time.Second)},
+		{TBS: "boundary", NotBefore: now.Add(-30 * 24 * time.Hour)},
+		{TBS: "inside", NotBefore: now.Add(-29*24*time.Hour - 12*time.Hour)},
+	} {
+		event.CAADomains = []string{"letsencrypt.org"}
+		event.NotAfter = now.Add(time.Hour)
+		event.Registrations = []RegistrationIssuance{{Hostname: "alpha"}}
+		require.NoError(t, s.RecordSSLMatePage(context.Background(), []CertificateIssuance{event}, event.TBS, false))
+	}
+	require.NoError(t, s.RebuildSnapshot(context.Background()))
+	require.Equal(t, uint64(2), s.Snapshot().Certificates30D)
 }

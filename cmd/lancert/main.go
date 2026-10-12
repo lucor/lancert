@@ -17,6 +17,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"go.lucor.dev/lancert/internal/api"
+	"go.lucor.dev/lancert/internal/certmonitor"
 	"go.lucor.dev/lancert/internal/dnsconfig"
 	"go.lucor.dev/lancert/internal/dnssrv"
 	"go.lucor.dev/lancert/internal/metrics"
@@ -122,6 +123,28 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// CT observations share the metrics database; keep monitoring best-effort
+	// when that optional database is unavailable so DNS can still start.
+	if metricStore != nil {
+		registrationUsage, usageErr := state.UsageStats(ctx)
+		if usageErr != nil {
+			slog.Error("certificate monitor bootstrap date unavailable", "error", usageErr)
+		} else if err := metricStore.InitializeSSLMate(ctx, registrationUsage.Since); err != nil {
+			slog.Error("certificate monitor state unavailable", "error", err)
+		} else if os.Getenv("SSLMATE_API_KEY") == "" {
+			if err := metricStore.SetSSLMateMonitorStatus(ctx, time.Now(), errors.New("SSLMATE_API_KEY is not configured")); err != nil {
+				slog.Error("certificate monitor status unavailable", "error", err)
+			}
+		} else {
+			monitor, monitorErr := certmonitor.New(metricStore, zone, os.Getenv("SSLMATE_API_KEY"), registrationUsage.Since, state.CertificateRegistrations)
+			if monitorErr != nil {
+				slog.Error("certificate transparency monitor unavailable", "error", monitorErr)
+			} else {
+				go monitor.Run(ctx)
+				slog.Info("SSLMate certificate monitor started")
+			}
+		}
+	}
 	realIP := api.NewRealIP(proxySubnet)
 	ipHasher := api.NewIPHasher(ipHashSecret)
 	limits := api.NewLimits(ctx)

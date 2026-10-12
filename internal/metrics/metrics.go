@@ -4,6 +4,7 @@ package metrics
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -58,29 +59,230 @@ type ClientFamilyActivity struct {
 	AcceptedUpdates uint64
 }
 
+// CAActivity counts distinct observed issuances and their status for one
+// certificate authority during the monitored history.
+type CAActivity struct {
+	Issuer    string `json:"issuer"`
+	Issuances uint64 `json:"issuances"`
+	Reissued  uint64 `json:"reissued"`
+	Revoked   uint64 `json:"revoked"`
+	Hostnames uint64 `json:"hostnames"`
+}
+
+// CertificateIssuance is the normalized event received from the CT provider.
+type CertificateIssuance struct {
+	TBS, Issuer          string
+	CAADomains, DNSNames []string
+	NotBefore, NotAfter  time.Time
+	Revoked              *bool
+	RevocationTime       *time.Time
+	RevocationCheckedAt  *time.Time
+	Registrations        []RegistrationIssuance
+}
+
+// RegistrationIssuance links an issuance to the matching core registration.
+type RegistrationIssuance struct {
+	Hostname string
+}
+
 // Snapshot is a point-in-time copy of the metrics used by status endpoints.
 type Snapshot struct {
-	Queries24H                 uint64
-	WriteAttempts24H           uint64
-	WriteSuccesses24H          uint64
-	RecentQueries              uint64
-	RecentWindow               time.Duration
-	ResponseP95                time.Duration
-	ResponseP95Overflow        bool
-	DailyLookups               []DailyLookup
-	RegistrationLookups30D     []RegistrationLookup
-	RegisteredQueries30D       uint64
-	RegisteredQueriesTotal     uint64
-	ClientFamilies             []ClientFamilyActivity
-	ActiveRegistrations30D     uint64
-	ACMEActiveRegistrations30D uint64
-	ChallengeUpdates30D        uint64
-	FreshAt                    time.Time
-	Degraded                   bool
-	Unavailable                bool
-	Error                      string
-	LastFlushAt                time.Time
-	LastFlushError             string
+	Queries24H                   uint64
+	WriteAttempts24H             uint64
+	WriteSuccesses24H            uint64
+	RecentQueries                uint64
+	RecentWindow                 time.Duration
+	ResponseP95                  time.Duration
+	ResponseP95Overflow          bool
+	DailyLookups                 []DailyLookup
+	RegistrationLookups30D       []RegistrationLookup
+	RegisteredQueries30D         uint64
+	RegisteredQueriesTotal       uint64
+	ClientFamilies               []ClientFamilyActivity
+	Certificates7D               uint64
+	Reissued7D                   uint64
+	Certificates30D              uint64
+	CertificatesTotal            uint64
+	LEAdoptedHostnames           uint64
+	CertificateHistorySince      time.Time
+	CertificateBootstrapComplete bool
+	CertificatesByCA             []CAActivity
+	CertificateMonitorUpdatedAt  time.Time
+	CertificateMonitorError      string
+	ActiveRegistrations30D       uint64
+	ACMEActiveRegistrations30D   uint64
+	ChallengeUpdates30D          uint64
+	FreshAt                      time.Time
+	Degraded                     bool
+	Unavailable                  bool
+	Error                        string
+	LastFlushAt                  time.Time
+	LastFlushError               string
+}
+
+// InitializeSSLMate persists the one-time lower bound used for certificate
+// display. The day boundary matches the date-only registration statistics.
+func (s *Store) InitializeSSLMate(ctx context.Context, since time.Time) error {
+	if since.IsZero() {
+		since = s.cfg.now().UTC()
+	}
+	cutoff := time.Date(since.UTC().Year(), since.UTC().Month(), since.UTC().Day(), 0, 0, 0, 0, time.UTC).Unix()
+	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO sslmate_monitor_state(id,cutoff_at) VALUES(1,?)`, cutoff)
+	return err
+}
+
+// SetSSLMateMonitorStatus records monitor health in its state row so failures
+// remain visible without storing a separate CT monitor status record.
+func (s *Store) SetSSLMateMonitorStatus(ctx context.Context, updatedAt time.Time, pollErr error) error {
+	if pollErr != nil {
+		_, err := s.db.ExecContext(ctx, `UPDATE sslmate_monitor_state SET error=? WHERE id=1`, pollErr.Error())
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE sslmate_monitor_state SET last_success_at=?,error='' WHERE id=1`, updatedAt.UTC().Unix())
+	return err
+}
+
+// SSLMateState returns the discovery cursor and whether the initial snapshot
+// has reached its empty terminal page.
+func (s *Store) SSLMateState(ctx context.Context) (string, bool, error) {
+	var after string
+	var complete int
+	err := s.db.QueryRowContext(ctx, `SELECT after_id,bootstrap_complete FROM sslmate_monitor_state WHERE id=1`).Scan(&after, &complete)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, errors.New("SSLMate monitor state is not initialized")
+	}
+	return after, complete == 1, err
+}
+
+// SSLMateRevocationState returns the cursor for the daily full-domain
+// revocation snapshot. A partial snapshot resumes at its saved issuance ID.
+func (s *Store) SSLMateRevocationState(ctx context.Context, now time.Time) (string, bool, error) {
+	var after string
+	var inProgress int
+	var refreshedAt int64
+	err := s.db.QueryRowContext(ctx, `SELECT refresh_after_id,refresh_in_progress,revocation_refreshed_at FROM sslmate_monitor_state WHERE id=1`).Scan(&after, &inProgress, &refreshedAt)
+	if err != nil {
+		return "", false, err
+	}
+	if inProgress == 1 {
+		return after, true, nil
+	}
+	return "", refreshedAt == 0 || now.UTC().Unix()-refreshedAt >= int64(24*time.Hour/time.Second), nil
+}
+
+// BeginSSLMatePoll reserves one hourly polling window across restarts and
+// multiple process instances, matching SSLMate's full-domain query allowance.
+func (s *Store) BeginSSLMatePoll(ctx context.Context, now time.Time) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `UPDATE sslmate_monitor_state SET last_attempt_at=? WHERE id=1 AND last_attempt_at<=?`, now.Unix(), now.Add(-time.Hour).Unix())
+	if err != nil {
+		return false, err
+	}
+	n, err := result.RowsAffected()
+	return n == 1, err
+}
+
+// RecordSSLMatePage stores a page and advances its cursor atomically. SSLMate's
+// opaque discovery cursor must move even when every issuance was filtered.
+func (s *Store) RecordSSLMatePage(ctx context.Context, events []CertificateIssuance, after string, complete bool) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := s.cfg.now().UTC().Unix()
+	for _, event := range events {
+		caaDomains, err := json.Marshal(event.CAADomains)
+		if err != nil {
+			return fmt.Errorf("encode certificate authority domains: %w", err)
+		}
+		dnsNames, err := json.Marshal(event.DNSNames)
+		if err != nil {
+			return fmt.Errorf("encode certificate DNS names: %w", err)
+		}
+		var revoked any
+		if event.Revoked != nil {
+			if *event.Revoked {
+				revoked = 1
+			} else {
+				revoked = 0
+			}
+		}
+		var revokedAt, checkedAt any
+		if event.RevocationTime != nil {
+			revokedAt = event.RevocationTime.UTC().Unix()
+		}
+		if event.RevocationCheckedAt != nil {
+			checkedAt = event.RevocationCheckedAt.UTC().Unix()
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO sslmate_issuances(
+            tbs_sha256,issuer_name,issuer_caa_domains,dns_names,not_before,
+            not_after,revoked,first_seen_at,revocation_time,revocation_checked_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(tbs_sha256) DO UPDATE SET
+            issuer_name=excluded.issuer_name,
+            issuer_caa_domains=excluded.issuer_caa_domains,
+            dns_names=excluded.dns_names,
+            not_after=excluded.not_after,
+            revoked=excluded.revoked,
+            revocation_time=excluded.revocation_time,
+            revocation_checked_at=excluded.revocation_checked_at`, event.TBS, event.Issuer, string(caaDomains), string(dnsNames), event.NotBefore.UTC().Unix(), event.NotAfter.UTC().Unix(), revoked, now, revokedAt, checkedAt)
+		if err != nil {
+			return err
+		}
+		for _, registration := range event.Registrations {
+			if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO sslmate_registration_issuances(tbs_sha256,hostname) VALUES(?,?)`, event.TBS, registration.Hostname); err != nil {
+				return err
+			}
+		}
+	}
+	completeInt := 0
+	if complete {
+		completeInt = 1
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE sslmate_monitor_state SET after_id=?,bootstrap_complete=MAX(bootstrap_complete,?) WHERE id=1`, after, completeInt)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// RecordSSLMateRevocationPage updates revocation state without changing the
+// original issuance data or its registration associations. A missing issuance
+// is ignored because discovery owns insertion and association mapping.
+func (s *Store) RecordSSLMateRevocationPage(ctx context.Context, events []CertificateIssuance, after string, complete bool) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, event := range events {
+		var revoked, revokedAt, checkedAt any
+		if event.Revoked != nil {
+			if *event.Revoked {
+				revoked = 1
+			} else {
+				revoked = 0
+			}
+		}
+		if event.RevocationTime != nil {
+			revokedAt = event.RevocationTime.UTC().Unix()
+		}
+		if event.RevocationCheckedAt != nil {
+			checkedAt = event.RevocationCheckedAt.UTC().Unix()
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE sslmate_issuances SET revoked=?,revocation_time=?,revocation_checked_at=? WHERE tbs_sha256=?`, revoked, revokedAt, checkedAt, event.TBS); err != nil {
+			return err
+		}
+	}
+	if complete {
+		_, err = tx.ExecContext(ctx, `UPDATE sslmate_monitor_state SET refresh_after_id='',refresh_in_progress=0,revocation_refreshed_at=? WHERE id=1`, s.cfg.now().UTC().Unix())
+	} else {
+		_, err = tx.ExecContext(ctx, `UPDATE sslmate_monitor_state SET refresh_after_id=?,refresh_in_progress=1 WHERE id=1`, after)
+	}
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // Option configures a Store.
@@ -500,6 +702,9 @@ func (s *Store) RebuildSnapshot(ctx context.Context) error {
 	if err = clientRows.Close(); err != nil {
 		return s.snapshotError(err)
 	}
+	if err = s.readCertificateMetrics(ctx, now, &out); err != nil {
+		return s.snapshotError(err)
+	}
 	lookupRows, err := s.db.QueryContext(ctx, `SELECT registration_id,sum(dns_queries) FROM registration_activity_daily WHERE date BETWEEN ? AND ? GROUP BY registration_id`, startDate, endDate)
 	if err != nil {
 		return s.snapshotError(err)
@@ -560,6 +765,108 @@ FROM (
 	return nil
 }
 
+// readCertificateMetrics keeps certificate aggregates separate from DNS
+// snapshot collection, while using the same clock for all reporting windows.
+func (s *Store) readCertificateMetrics(ctx context.Context, now time.Time, out *Snapshot) error {
+	var certCutoff, lastCertificateSuccess int64
+	var bootstrapComplete int
+	err := s.db.QueryRowContext(ctx, `SELECT cutoff_at,bootstrap_complete,last_success_at,error FROM sslmate_monitor_state WHERE id=1`).Scan(&certCutoff, &bootstrapComplete, &lastCertificateSuccess, &out.CertificateMonitorError)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if err == nil {
+		out.CertificateHistorySince = time.Unix(certCutoff, 0).UTC()
+		out.CertificateBootstrapComplete = bootstrapComplete == 1
+		if lastCertificateSuccess > 0 {
+			out.CertificateMonitorUpdatedAt = time.Unix(lastCertificateSuccess, 0).UTC()
+		}
+		// An issuance remains evidence that a certificate was issued even if a
+		// client later revokes it; revocation only changes active adoption.
+		eligible := `EXISTS (
+            SELECT 1 FROM json_each(i.issuer_caa_domains) ca
+            WHERE ca.value='letsencrypt.org'
+        )`
+		// A certificate is a reissuance only when every associated hostname has
+		// an earlier issuance from this CA in the monitored history.
+		firstIssuance := `EXISTS (
+            SELECT 1 FROM sslmate_registration_issuances ca
+            WHERE ca.tbs_sha256=i.tbs_sha256 AND NOT EXISTS (
+                SELECT 1 FROM sslmate_issuances p
+                JOIN sslmate_registration_issuances pa USING(tbs_sha256)
+                WHERE pa.hostname=ca.hostname AND p.tbs_sha256<>i.tbs_sha256
+                  AND p.not_before>=?
+                  AND EXISTS (
+                      SELECT 1 FROM json_each(p.issuer_caa_domains) pca
+                      WHERE pca.value='letsencrypt.org'
+                  )
+                  AND (p.not_before<i.not_before OR
+                       (p.not_before=i.not_before AND p.tbs_sha256<i.tbs_sha256))
+            )
+        )`
+		sevenDayCutoff := max(now.Add(-7*24*time.Hour).Unix(), certCutoff)
+		if err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM sslmate_issuances i WHERE `+eligible+` AND i.not_before>=? AND i.not_before<=?`, sevenDayCutoff, now.Unix()).Scan(&out.Certificates7D); err != nil {
+			return err
+		}
+		if err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM sslmate_issuances i WHERE `+eligible+` AND i.not_before>=? AND i.not_before<=? AND NOT `+firstIssuance, sevenDayCutoff, now.Unix(), certCutoff).Scan(&out.Reissued7D); err != nil {
+			return err
+		}
+		thirtyDayCutoff := max(now.Add(-30*24*time.Hour).Unix(), certCutoff)
+		if err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM sslmate_issuances i WHERE `+eligible+` AND i.not_before>=? AND i.not_before<=?`, thirtyDayCutoff, now.Unix()).Scan(&out.Certificates30D); err != nil {
+			return err
+		}
+		if err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM sslmate_issuances i WHERE `+eligible+` AND i.not_before>=?`, certCutoff).Scan(&out.CertificatesTotal); err != nil {
+			return err
+		}
+		activeLE := `i.revoked=0 AND i.not_after>=? AND EXISTS (SELECT 1 FROM json_each(i.issuer_caa_domains) ca WHERE ca.value='letsencrypt.org')`
+		if err = s.db.QueryRowContext(ctx, `SELECT count(DISTINCT a.hostname) FROM sslmate_issuances i JOIN sslmate_registration_issuances a USING(tbs_sha256) WHERE `+activeLE+` AND i.not_before>=?`, now.Unix(), certCutoff).Scan(&out.LEAdoptedHostnames); err != nil {
+			return err
+		}
+		caRows, qerr := s.db.QueryContext(ctx, `SELECT COALESCE(NULLIF(i.issuer_name,''),'Unknown CA'),
+                   count(DISTINCT i.tbs_sha256),
+                   count(DISTINCT CASE WHEN
+                       EXISTS (SELECT 1 FROM sslmate_registration_issuances own WHERE own.tbs_sha256=i.tbs_sha256)
+                       AND NOT EXISTS (
+                           SELECT 1 FROM sslmate_registration_issuances ca
+                           WHERE ca.tbs_sha256=i.tbs_sha256 AND NOT EXISTS (
+                               SELECT 1 FROM sslmate_issuances p
+                               JOIN sslmate_registration_issuances pa USING(tbs_sha256)
+                               WHERE pa.hostname=ca.hostname AND p.tbs_sha256<>i.tbs_sha256
+                                 AND p.not_before>=?
+                                 AND COALESCE(NULLIF(p.issuer_name,''),'Unknown CA')=COALESCE(NULLIF(i.issuer_name,''),'Unknown CA')
+                                 AND (p.not_before<i.not_before OR
+                                      (p.not_before=i.not_before AND p.tbs_sha256<i.tbs_sha256))
+                           )
+                       ) THEN i.tbs_sha256 END),
+                   count(DISTINCT CASE WHEN i.revoked=1 THEN i.tbs_sha256 END),
+                   count(DISTINCT a.hostname)
+            FROM sslmate_issuances i
+            LEFT JOIN sslmate_registration_issuances a USING(tbs_sha256)
+            WHERE i.not_before>=?
+            GROUP BY COALESCE(NULLIF(i.issuer_name,''),'Unknown CA')
+            ORDER BY count(DISTINCT i.tbs_sha256) DESC,1`, certCutoff, certCutoff)
+		if qerr != nil {
+			return qerr
+		}
+		for caRows.Next() {
+			var activity CAActivity
+			if err = caRows.Scan(&activity.Issuer, &activity.Issuances, &activity.Reissued, &activity.Revoked, &activity.Hostnames); err != nil {
+				caRows.Close()
+				return err
+			}
+			out.CertificatesByCA = append(out.CertificatesByCA, activity)
+		}
+		if err = caRows.Err(); err != nil {
+			caRows.Close()
+			return err
+		}
+		if err = caRows.Close(); err != nil {
+			return err
+		}
+
+	}
+	return nil
+}
+
 func (s *Store) snapshotError(err error) error {
 	s.snapMu.Lock()
 	s.snap.Degraded = true
@@ -598,6 +905,7 @@ func (s *Store) Snapshot() Snapshot {
 	r.DailyLookups = append([]DailyLookup(nil), r.DailyLookups...)
 	r.RegistrationLookups30D = append([]RegistrationLookup(nil), r.RegistrationLookups30D...)
 	r.ClientFamilies = append([]ClientFamilyActivity(nil), r.ClientFamilies...)
+	r.CertificatesByCA = append([]CAActivity(nil), r.CertificatesByCA...)
 	return r
 }
 

@@ -198,7 +198,14 @@ func TestHealthAndStatus(t *testing.T) {
 			"queries_24h":42,
 			"acme_active_registrations_30d":3,
 			"response_p95_ms":1.5,
-			"updated_at":"2026-07-30T12:00:00Z"
+			"certificate_bootstrap_complete":false,
+			"lets_encrypt_certificates_7d":0,
+			"lets_encrypt_reissued_7d":0,
+			"lets_encrypt_adopted_hostnames":0,
+			"updated_at":"2026-07-30T12:00:00Z",
+			"certificates_observed_30d":0,
+			"certificates_observed_total":0,
+			"certificate_monitor_degraded":false
 		}
 	}`, status.Body.String())
 }
@@ -216,7 +223,7 @@ func TestPublicPages(t *testing.T) {
 		{"/docs/cli", []string{"CLI Quickstart", "Install the CLI", "brew install lucor/tap/lancert", "go install go.lucor.dev/lancert-cli/cmd/lancert@latest", "lancert 192.168.1.50", "Let’s Encrypt", "rate limits", "lancert renew", "Prefer another ACME client"}, nil},
 		{"/docs/acme-clients", []string{"Use your own ACME client", "Register the target IP", "one-time-secret", "Certbot", "Lego", "acme.sh", "Caddy", "Nginx", "Traefik", "Renew the certificate"}, nil},
 		{"/docs/api", []string{"api-reference", `data-url="/openapi.yaml"`, "Lancert v2"}, nil},
-		{"/status", []string{"lancert status", "Adoption", "Registered hostnames", "Hostnames with DNS-01 activity", "Activation rate", "New hostnames", "Address patterns", "DNS activity", "Queries by local network", "Queries by private IP", "ACME client activity", "lancert-cli", "42"}, map[string]string{"Accept": "text/html"}},
+		{"/status", []string{"lancert status", "Adoption", "Registered hostnames", "DNS-01 active", "New hostnames", "With a Let's Encrypt certificate", "Address patterns", "DNS activity", "Queries by local network", "Queries by private IP", "ACME client activity", "Certificate activity", "lancert-cli", "42"}, map[string]string{"Accept": "text/html"}},
 		{"/openapi.yaml", []string{"openapi: 3.1.0", "/register/{ip}", "/update"}, nil},
 	}
 	for _, test := range tests {
@@ -226,7 +233,7 @@ func TestPublicPages(t *testing.T) {
 			for _, expected := range test.contains {
 				assert.Contains(t, response.Body.String(), expected)
 			}
-			for _, obsolete := range []string{"lancert-registration.json", "clients/", "download PEM", "certificate issuance", "certificate downloads", "Certificate availability", "ARI renewal", "Suspended"} {
+			for _, obsolete := range []string{"lancert-registration.json", "clients/", "download PEM", "certificate downloads", "Certificate availability", "confirms ARI renewal", "Suspended"} {
 				assert.NotContains(t, response.Body.String(), obsolete)
 			}
 		})

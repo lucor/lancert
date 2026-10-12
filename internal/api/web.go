@@ -54,27 +54,35 @@ type pageData struct {
 }
 
 type statusPageData struct {
-	Analytics               bool
-	Status                  string
-	Version                 string
-	Commit                  string
-	UsageAvailable          bool
-	MetricsAvailable        bool
-	MetricsUpdatedAt        time.Time
-	Usage                   registration.Usage
-	RegistrationChart       []usageChartPoint
-	DNSChart                []usageChartPoint
-	AddressBlocks           []networkUsageView
-	TopPrefixes             []networkUsageView
-	TopIPs                  []privateIPUsageView
-	DNSPrefixes             []networkUsageView
-	DNSIPs                  []privateIPUsageView
-	ClientFamilies          []metrics.ClientFamilyActivity
-	ActivationRate          string
-	NewHostnames7D          uint64
-	NewHostnames30D         uint64
-	RegisteredQueries30D    uint64
-	RegisteredQueriesTotal  uint64
+	Analytics                bool
+	Status                   string
+	Version                  string
+	Commit                   string
+	UsageAvailable           bool
+	MetricsAvailable         bool
+	MetricsUpdatedAt         time.Time
+	Usage                    registration.Usage
+	RegistrationChart        []usageChartPoint
+	DNSChart                 []usageChartPoint
+	AddressBlocks            []networkUsageView
+	TopPrefixes              []networkUsageView
+	TopIPs                   []privateIPUsageView
+	DNSPrefixes              []networkUsageView
+	DNSIPs                   []privateIPUsageView
+	ClientFamilies           []metrics.ClientFamilyActivity
+	ActivationRate           string
+	NewHostnames7D           uint64
+	NewHostnames30D          uint64
+	RegisteredQueries30D     uint64
+	RegisteredQueriesTotal   uint64
+	Certificates7D           uint64
+	Reissued7D               uint64
+	LEAdoptedHostnames       uint64
+	CertificatesByCA         []metrics.CAActivity
+	CertificateHistorySince  time.Time
+	CertificateBootstrapDone bool
+	CertificateMonitorAt     time.Time
+	CertificateMonitorError  bool
 }
 
 type usageChartPoint struct {
@@ -139,15 +147,23 @@ func handleOpenAPI(w http.ResponseWriter, _ *http.Request) {
 func (h *Handler) handleStatusPage(w http.ResponseWriter, r *http.Request) {
 	snapshot := h.snapshot()
 	data := statusPageData{
-		Analytics:              analyticsHost(r.Host),
-		Status:                 "operational",
-		Version:                h.build.Version,
-		Commit:                 h.build.CommitHash,
-		MetricsAvailable:       !snapshot.Unavailable,
-		MetricsUpdatedAt:       snapshot.FreshAt,
-		RegisteredQueries30D:   snapshot.RegisteredQueries30D,
-		RegisteredQueriesTotal: snapshot.RegisteredQueriesTotal,
-		ClientFamilies:         snapshot.ClientFamilies,
+		Analytics:                analyticsHost(r.Host),
+		Status:                   "operational",
+		Version:                  h.build.Version,
+		Commit:                   h.build.CommitHash,
+		MetricsAvailable:         !snapshot.Unavailable,
+		MetricsUpdatedAt:         snapshot.FreshAt,
+		RegisteredQueries30D:     snapshot.RegisteredQueries30D,
+		RegisteredQueriesTotal:   snapshot.RegisteredQueriesTotal,
+		Certificates7D:           snapshot.Certificates7D,
+		Reissued7D:               snapshot.Reissued7D,
+		LEAdoptedHostnames:       snapshot.LEAdoptedHostnames,
+		CertificatesByCA:         snapshot.CertificatesByCA,
+		CertificateHistorySince:  snapshot.CertificateHistorySince,
+		CertificateBootstrapDone: snapshot.CertificateBootstrapComplete,
+		CertificateMonitorAt:     snapshot.CertificateMonitorUpdatedAt,
+		CertificateMonitorError:  snapshot.CertificateMonitorError != "",
+		ClientFamilies:           snapshot.ClientFamilies,
 	}
 	if !h.operational() || snapshot.Unavailable || snapshot.Degraded {
 		data.Status = "degraded"

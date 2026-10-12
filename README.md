@@ -121,6 +121,12 @@ LANCERT_STATIC_TXT='{"@":{"ttl":300,"values":["verification-value"]}}'
 
 Dynamic challenge owners are reserved. Configuration changes require restart.
 
+### Certificate metrics
+
+The status page includes certificate metrics observed in public Certificate
+Transparency logs. Configure `SSLMATE_API_KEY` to enable them; monitoring
+delays do not affect DNS or registration service availability.
+
 ## Development
 
 ```bash
