@@ -68,6 +68,13 @@ func startTestServer(t *testing.T, recorder Recorder) (*Server, string, *testSta
 		StaticTXT: map[string]StaticTXTRecord{
 			testZone: {TTL: 600, Values: []string{"verification"}},
 		},
+		StaticMX: map[string]StaticMXRecord{
+			testZone: {TTL: 600, Records: []MXRecord{
+				{Preference: 10, Exchange: "mx1.example.net."},
+				{Preference: 20, Exchange: "mx2.example.net."},
+			}},
+			"mail.lancert.dev.": {TTL: 300, Records: []MXRecord{{Preference: 10, Exchange: "mx1.example.net."}}},
+		},
 		Recorder: recorder,
 	}
 	srv := New(cfg, state)
@@ -214,6 +221,51 @@ func TestInfrastructureStaticAndNoCAA(t *testing.T) {
 	assert.Equal(t, dns.RcodeSuccess, caa.Rcode)
 	assert.Empty(t, caa.Answer)
 	require.Len(t, caa.Ns, 1)
+}
+
+func TestStaticMX(t *testing.T) {
+	_, addr, _ := startTestServer(t, nil)
+	response := query(t, addr, "LANCERT.DEV.", dns.TypeMX)
+	require.Equal(t, dns.RcodeSuccess, response.Rcode)
+	assert.True(t, response.Authoritative)
+	require.Len(t, response.Answer, 2)
+	for i, exchange := range []string{"mx1.example.net.", "mx2.example.net."} {
+		record := response.Answer[i].(*dns.MX)
+		assert.Equal(t, exchange, record.Mx)
+		assert.Equal(t, uint16((i+1)*10), record.Preference)
+		assert.Equal(t, uint32(600), record.Hdr.Ttl)
+		assert.Equal(t, "LANCERT.DEV.", record.Hdr.Name)
+	}
+
+	// MX-only owners exist even when queried for a type without a record.
+	response = query(t, addr, "mail.lancert.dev.", dns.TypeMX)
+	require.Len(t, response.Answer, 1)
+	assert.Equal(t, uint32(300), response.Answer[0].Header().Ttl)
+	for _, qtype := range []uint16{dns.TypeA, dns.TypeTXT} {
+		response = query(t, addr, "mail.lancert.dev.", qtype)
+		assert.Equal(t, dns.RcodeSuccess, response.Rcode)
+		assert.Empty(t, response.Answer)
+		require.Len(t, response.Ns, 1)
+	}
+
+	// Apex mail routes must not spread to registered or wildcard hostnames.
+	for _, name := range []string{testHostname + ".lancert.dev.", "www." + testHostname + ".lancert.dev.", "ns1.lancert.dev."} {
+		response = query(t, addr, name, dns.TypeMX)
+		assert.Equal(t, dns.RcodeSuccess, response.Rcode)
+		assert.Empty(t, response.Answer)
+		require.Len(t, response.Ns, 1)
+	}
+	response = query(t, addr, "unknown.lancert.dev.", dns.TypeMX)
+	assert.Equal(t, dns.RcodeNameError, response.Rcode)
+}
+
+func TestStaticMXUnset(t *testing.T) {
+	server := New(Config{Zone: testZone}, nil)
+	response := new(dns.Msg)
+	server.answer(response, dns.Question{Name: testZone, Qtype: dns.TypeMX, Qclass: dns.ClassINET})
+	assert.Equal(t, dns.RcodeSuccess, response.Rcode)
+	assert.Empty(t, response.Answer)
+	require.Len(t, response.Ns, 1)
 }
 
 func TestRecorderTracksDNSAndRegistrationActivity(t *testing.T) {

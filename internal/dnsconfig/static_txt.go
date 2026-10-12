@@ -41,7 +41,7 @@ func ParseStaticTXT(raw, zone string) (map[string]dnssrv.StaticTXTRecord, error)
 	zone = strings.ToLower(dns.Fqdn(zone))
 	records := make(map[string]dnssrv.StaticTXTRecord, len(configured))
 	for configuredName, configuredRecord := range configured {
-		name, err := staticTXTFQDN(configuredName, zone)
+		name, err := staticRecordFQDN(configuredName, zone)
 		if err != nil {
 			return nil, fmt.Errorf("invalid LANCERT_STATIC_TXT name %q: %w", configuredName, err)
 		}
@@ -69,7 +69,9 @@ func ParseStaticTXT(raw, zone string) (map[string]dnssrv.StaticTXTRecord, error)
 	return records, nil
 }
 
-func staticTXTFQDN(configuredName, zone string) (string, error) {
+// staticRecordFQDN normalizes owners and keeps static records inside the zone,
+// away from the challenge names managed by ACME clients.
+func staticRecordFQDN(configuredName, zone string) (string, error) {
 	name := strings.ToLower(strings.TrimSpace(configuredName))
 	switch {
 	case name == "":

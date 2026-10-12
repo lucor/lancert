@@ -121,6 +121,18 @@ LANCERT_STATIC_TXT='{"@":{"ttl":300,"values":["verification-value"]}}'
 
 Dynamic challenge owners are reserved. Configuration changes require restart.
 
+### Static MX records
+
+`LANCERT_STATIC_MX` publishes mail routes using the same owner names as static
+TXT records. Exchanges are absolute mail server names; a trailing dot is optional.
+Use the records supplied by your email provider:
+
+```env
+LANCERT_STATIC_MX='{"@":{"ttl":300,"records":[{"preference":10,"exchange":"mx1.example.net."},{"preference":20,"exchange":"mx2.example.net."}]}}'
+```
+
+The default TTL is 300 seconds. Configuration changes require restart.
+
 ### Certificate metrics
 
 The status page includes certificate metrics observed in public Certificate

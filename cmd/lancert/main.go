@@ -72,6 +72,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	staticMX, err := dnsconfig.ParseStaticMX(os.Getenv("LANCERT_STATIC_MX"), zone)
+	if err != nil {
+		return err
+	}
 
 	// Authoritative state is fail-closed and must be loaded before listeners.
 	state, err := registration.Open(filepath.Join(dataDir, coreDatabaseName))
@@ -106,6 +110,7 @@ func run() error {
 		SOAMname:  "ns1." + zone,
 		SOARname:  "admin." + zone,
 		StaticTXT: staticTXT,
+		StaticMX:  staticMX,
 		Recorder:  recorder,
 	}, state)
 

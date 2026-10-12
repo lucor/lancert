@@ -28,6 +28,7 @@ type Config struct {
 	SOAMname  string
 	SOARname  string
 	StaticTXT map[string]StaticTXTRecord
+	StaticMX  map[string]StaticMXRecord
 	Recorder  Recorder
 }
 
@@ -35,6 +36,18 @@ type Config struct {
 type StaticTXTRecord struct {
 	TTL    uint32
 	Values []string
+}
+
+// StaticMXRecord is a configured MX RRset sharing a single TTL.
+type StaticMXRecord struct {
+	TTL     uint32
+	Records []MXRecord
+}
+
+// MXRecord identifies a mail server; senders prefer lower preference values.
+type MXRecord struct {
+	Preference uint16 `json:"preference"`
+	Exchange   string `json:"exchange"`
 }
 
 // Recorder receives aggregate observations and must not block. An empty
@@ -162,6 +175,8 @@ func (s *Server) answer(msg *dns.Msg, q dns.Question) owner {
 		s.answerA(msg, q, resolved)
 	case dns.TypeTXT:
 		s.answerTXT(msg, q, resolved)
+	case dns.TypeMX:
+		s.answerMX(msg, q)
 	case dns.TypeSOA:
 		if resolved.kind == ownerApex {
 			msg.Answer = append(msg.Answer, s.soaRR(s.config.Zone))
@@ -191,6 +206,9 @@ func (s *Server) resolveOwner(name string) owner {
 	}
 	if static, ok := s.config.StaticTXT[name]; ok {
 		return owner{kind: ownerStatic, static: static}
+	}
+	if _, ok := s.config.StaticMX[name]; ok {
+		return owner{kind: ownerStatic}
 	}
 
 	labels, ok := relativeLabels(name, strings.ToLower(s.config.Zone))
@@ -249,6 +267,22 @@ func (s *Server) answerTXT(msg *dns.Msg, q dns.Question, resolved owner) {
 		return
 	}
 	s.negative(msg, false)
+}
+
+// answerMX publishes configured mail routes without inheriting apex MX records
+// at registered hostnames or their wildcard owners.
+func (s *Server) answerMX(msg *dns.Msg, q dns.Question) {
+	rrset := s.config.StaticMX[strings.ToLower(q.Name)]
+	for _, record := range rrset.Records {
+		msg.Answer = append(msg.Answer, &dns.MX{
+			Hdr:        dns.RR_Header{Name: q.Name, Rrtype: dns.TypeMX, Class: dns.ClassINET, Ttl: rrset.TTL},
+			Preference: record.Preference,
+			Mx:         record.Exchange,
+		})
+	}
+	if len(msg.Answer) == 0 {
+		s.negative(msg, false)
+	}
 }
 
 func (s *Server) negative(msg *dns.Msg, nameError bool) {
