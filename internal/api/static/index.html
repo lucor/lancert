@@ -460,14 +460,20 @@
     margin-bottom: 12px;
   }
 
-  /* ── DONATE ── */
-  .donate {
+  /* ── COMMUNITY AND SUPPORT ── */
+  .community-support {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 24px;
     max-width: 1040px;
     margin: 0 auto;
     padding: 0 24px 72px;
   }
 
-  .donate-box {
+  .support-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
     text-align: center;
     border: 1px solid var(--line);
     border-radius: 10px;
@@ -475,7 +481,14 @@
     background: var(--surface);
   }
 
-  .donate-box p {
+  .support-card h2 {
+    font-size: 22px;
+    color: var(--ink);
+    margin: 0 0 12px;
+  }
+
+  .support-card p {
+    flex: 1;
     font-size: 15px;
     color: var(--muted);
     line-height: 1.6;
@@ -483,7 +496,7 @@
     margin: 0 auto;
   }
 
-  .donate-link {
+  .support-link {
     display: inline-block;
     margin-top: 16px;
     font-size: 14px;
@@ -495,7 +508,7 @@
     transition: opacity 0.15s;
   }
 
-  .donate-link:hover { opacity: 0.85; text-decoration: none; }
+  .support-link:hover { opacity: 0.85; text-decoration: none; }
 
   .site-footer {
     max-width: 1040px;
@@ -510,6 +523,7 @@
 
   /* ── RESPONSIVE ── */
   @media (max-width: 640px) {
+    .community-support { grid-template-columns: 1fr; gap: 16px; padding: 0 20px 56px; }
     .hero { padding: 56px 20px 48px; }
     .hero h1 { font-size: 38px; }
     .hero .subtitle { font-size: 16px; }
@@ -755,11 +769,17 @@
   </div>
 </section>
 
-<div class="donate">
-  <div class="donate-box">
+<div class="community-support">
+  <section class="support-card" aria-labelledby="community-title">
+    <h2 id="community-title">Using Lancert?</h2>
+    <p>Tell us how you use Lancert in your homelab, local development environment, or self-hosted setup.</p>
+    <a class="support-link" href="https://github.com/lucor/lancert/discussions/categories/show-and-tell">Show and tell on GitHub</a>
+  </section>
+  <section class="support-card" aria-labelledby="support-title">
+    <h2 id="support-title">Support Let’s Encrypt</h2>
     <p>Lancert is free and uses Let’s Encrypt by default. If you find it useful, consider supporting them.</p>
-    <a class="donate-link" href="https://letsencrypt.org/donate/">Donate to Let’s Encrypt</a>
-  </div>
+    <a class="support-link" href="https://letsencrypt.org/donate/">Donate to Let’s Encrypt</a>
+  </section>
 </div>
 </main>
 
