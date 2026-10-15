@@ -41,11 +41,31 @@ func TestRegisterShapesAndValidation(t *testing.T) {
 	for _, addr := range []netip.Addr{
 		{}, netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("127.0.0.1"),
 		netip.MustParseAddr("100.64.0.1"), netip.MustParseAddr("169.254.1.1"),
-		netip.MustParseAddr("fd00::1"),
+		netip.MustParseAddr("fc00::1"), netip.MustParseAddr("2001:db8::1"),
+		netip.MustParseAddr("::ffff:192.168.1.1"),
 	} {
 		_, err := s.Register(context.Background(), addr)
 		assert.ErrorIs(t, err, ErrInvalidAddress)
 	}
+}
+
+func TestRegisterPersistsAndReloadsCanonicalULA(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "core.db")
+	s, err := Open(path)
+	require.NoError(t, err)
+	credentials, err := s.Register(context.Background(), netip.MustParseAddr("FD12:3456:789A:0001:0000:0000:0000:0025"))
+	require.NoError(t, err)
+	var targetIP string
+	require.NoError(t, s.db.QueryRow(`SELECT target_ip FROM registrations WHERE id=?`, credentials.ID).Scan(&targetIP))
+	assert.Equal(t, "fd12:3456:789a:1::25", targetIP)
+	require.NoError(t, s.Close())
+
+	s, err = Open(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
+	registration, ok := s.Lookup(credentials.Hostname)
+	require.True(t, ok)
+	assert.Equal(t, netip.MustParseAddr("fd12:3456:789a:1::25"), registration.TargetIP)
 }
 
 func TestPersistenceDigestPermissionsUsageAndEphemeralChallenges(t *testing.T) {

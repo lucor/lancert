@@ -1,4 +1,4 @@
-// Package privateip provides RFC 1918 private IPv4 address validation.
+// Package privateip provides private IPv4 and IPv6 address validation.
 package privateip
 
 import (
@@ -6,41 +6,49 @@ import (
 	"net/netip"
 )
 
-// RFC 1918 private address ranges.
-var rfc1918Ranges = []netip.Prefix{
+// Private address ranges supported by Lancert.
+var privateRanges = []netip.Prefix{
 	netip.MustParsePrefix("10.0.0.0/8"),
 	netip.MustParsePrefix("172.16.0.0/12"),
 	netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("fd00::/8"),
 }
 
-// ValidateRFC1918 parses the string as an IP and verifies it belongs to
-// one of the three RFC 1918 private ranges. Loopback, link-local, and
-// CGNAT addresses are rejected.
-func ValidateRFC1918(s string) (netip.Addr, error) {
+// Validate parses an IP address and verifies it belongs to an RFC 1918 IPv4
+// range or the locally assigned ULA range. Zoned addresses are not supported.
+func Validate(s string) (netip.Addr, error) {
 	addr, err := netip.ParseAddr(s)
 	if err != nil {
 		return netip.Addr{}, fmt.Errorf("invalid IP address %q: %w", s, err)
 	}
 
-	if !addr.Is4() {
-		return netip.Addr{}, fmt.Errorf("only IPv4 is supported: %s", addr)
+	if addr.Zone() != "" {
+		return netip.Addr{}, fmt.Errorf("zoned IP address %q is not supported", s)
 	}
 
-	if addr.IsLoopback() {
-		return netip.Addr{}, fmt.Errorf("loopback address %s is not allowed", addr)
-	}
-
-	if !IsRFC1918(addr) {
-		return netip.Addr{}, fmt.Errorf("IP %s is not a private RFC 1918 address (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)", addr)
+	if !IsPrivate(addr) {
+		return netip.Addr{}, fmt.Errorf("IP %s is not a supported private address (RFC 1918 IPv4 or fd00::/8 ULA)", addr)
 	}
 
 	return addr, nil
 }
 
-// IsRFC1918 reports whether addr falls within one of the three RFC 1918
-// private address ranges.
-func IsRFC1918(addr netip.Addr) bool {
-	for _, prefix := range rfc1918Ranges {
+// IsPrivate reports whether addr belongs to a supported RFC 1918 IPv4 range
+// or the locally assigned ULA range.
+func IsPrivate(addr netip.Addr) bool {
+	if !addr.IsValid() {
+		// Invalid addresses cannot belong to a supported private range.
+		return false
+	}
+	if addr.Zone() != "" {
+		// Zone identifiers are interface-scoped and are not part of DNS addresses.
+		return false
+	}
+	if addr.Is4In6() {
+		// Keep IPv4-mapped IPv6 addresses from creating a second form of an IPv4 target.
+		return false
+	}
+	for _, prefix := range privateRanges {
 		if prefix.Contains(addr) {
 			return true
 		}

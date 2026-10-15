@@ -117,7 +117,7 @@ func (h *Handler) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request")
 		return
 	}
-	addr, err := privateip.ValidateRFC1918(r.PathValue("ip"))
+	addr, err := privateip.Validate(r.PathValue("ip"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_ip")
 		return

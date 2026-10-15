@@ -114,7 +114,9 @@ func TestRegisterRejectsUnsupportedRoutesAddressesAndBodies(t *testing.T) {
 		{http.MethodGet, "/register/192.168.1.50", nil, http.StatusMethodNotAllowed},
 		{http.MethodPost, "/register/8.8.8.8", nil, http.StatusBadRequest},
 		{http.MethodPost, "/register/127.0.0.1", nil, http.StatusBadRequest},
-		{http.MethodPost, "/register/fd00::1", nil, http.StatusBadRequest},
+		{http.MethodPost, "/register/fc00::1", nil, http.StatusBadRequest},
+		{http.MethodPost, "/register/fd12:3456:789a:1::25", nil, http.StatusCreated},
+		{http.MethodPost, "/register/fd12%3A3456%3A789a%3A1%3A%3A25", nil, http.StatusCreated},
 		{http.MethodPost, "/register/192.168.1.50", []byte("x"), http.StatusBadRequest},
 	}
 	for _, test := range tests {

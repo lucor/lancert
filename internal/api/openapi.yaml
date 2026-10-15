@@ -3,7 +3,7 @@ info:
   title: Lancert API
   version: 2.0.0
   description: |
-    Register an RFC 1918 IPv4 hostname and update its DNS-01 TXT record.
+    Register an RFC 1918 IPv4 or locally assigned ULA IPv6 hostname and update its DNS-01 TXT record.
     Lancert never issues, stores, or distributes certificates or private keys.
     Only POST /update is compatible with the acme-dns wire contract.
     Every response includes X-Lancert-API-Version. Version 2 is the current
@@ -13,7 +13,7 @@ servers:
 paths:
   /register/{ip}:
     post:
-      summary: Register a private IPv4 hostname
+      summary: Register a private IP hostname
       description: Accepts an empty body and returns unrecoverable credentials once.
       parameters:
         - name: ip
@@ -21,7 +21,11 @@ paths:
           required: true
           schema:
             type: string
-          example: 192.168.1.50
+          examples:
+            ipv4:
+              value: 192.168.1.50
+            ipv6:
+              value: fd12:3456:789a:1::25
       responses:
         "201":
           description: Registration created.

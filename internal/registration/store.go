@@ -37,8 +37,8 @@ var (
 	ErrForbidden = errors.New("forbidden")
 	// ErrInvalidChallenge indicates malformed TXT data after valid authentication.
 	ErrInvalidChallenge = errors.New("invalid challenge")
-	// ErrInvalidAddress indicates that registration was attempted for a non-RFC1918 IPv4 address.
-	ErrInvalidAddress = errors.New("invalid private IPv4 address")
+	// ErrInvalidAddress indicates that registration was attempted for an unsupported private address.
+	ErrInvalidAddress = errors.New("invalid private IP address")
 )
 
 var dummyDigest = digestKey("dummy-key-never-issued")
@@ -187,7 +187,7 @@ func (s *Store) load(ctx context.Context) error {
 		if err := rows.Scan(&id, &hostname, &targetIP); err != nil {
 			return fmt.Errorf("registration: scan state: %w", err)
 		}
-		addr, err := privateip.ValidateRFC1918(targetIP)
+		addr, err := privateip.Validate(targetIP)
 		if err != nil || !validInternalID(id) || !validHostname(hostname) {
 			return fmt.Errorf("registration: invalid active registration %q", id)
 		}
@@ -210,9 +210,9 @@ func (s *Store) Lookup(hostname string) (Registration, bool) {
 	return r, ok
 }
 
-// Register creates an RFC1918 registration.
+// Register creates a registration for a supported private IP address.
 func (s *Store) Register(ctx context.Context, addr netip.Addr) (Credentials, error) {
-	if !addr.IsValid() || !addr.Is4() || !privateip.IsRFC1918(addr) {
+	if !privateip.IsPrivate(addr) {
 		return Credentials{}, ErrInvalidAddress
 	}
 	s.mutationMu.Lock()
