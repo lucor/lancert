@@ -22,7 +22,7 @@ type NetworkUsage struct {
 	PrivateIPs uint64
 }
 
-// PrivateIPUsage reports registrations for one private IPv4 address.
+// PrivateIPUsage reports registrations for one private IP address.
 type PrivateIPUsage struct {
 	IP                  string
 	Hostnames           uint64
@@ -37,8 +37,11 @@ type Usage struct {
 	Since               time.Time
 	Daily               []DailyUsage
 	Blocks              []NetworkUsage
+	IPv6Blocks          []NetworkUsage
 	Prefixes            []NetworkUsage
+	IPv6Prefixes        []NetworkUsage
 	IPs                 []PrivateIPUsage
+	IPv6IPs             []PrivateIPUsage
 	RegistrationTargets map[string]string
 }
 
@@ -53,6 +56,8 @@ var privateBlocks = [...]netip.Prefix{
 	netip.MustParsePrefix("192.168.0.0/16"),
 }
 
+var privateIPv6Block = netip.MustParsePrefix("fd00::/8")
+
 // UsageStats derives public aggregate usage statistics from registration state.
 func (s *Store) UsageStats(ctx context.Context) (Usage, error) {
 	operationCtx, cancel := context.WithTimeout(ctx, operationTimeout)
@@ -65,12 +70,15 @@ func (s *Store) UsageStats(ctx context.Context) (Usage, error) {
 
 	daily := make(map[string]*DailyUsage)
 	blocks := map[string]*networkCounter{
-		"10.0.0.0/8":     {ips: make(map[string]struct{})},
-		"172.16.0.0/12":  {ips: make(map[string]struct{})},
-		"192.168.0.0/16": {ips: make(map[string]struct{})},
+		"10.0.0.0/8":              {ips: make(map[string]struct{})},
+		"172.16.0.0/12":           {ips: make(map[string]struct{})},
+		"192.168.0.0/16":          {ips: make(map[string]struct{})},
+		privateIPv6Block.String(): {ips: make(map[string]struct{})},
 	}
 	prefixes := make(map[string]*networkCounter)
+	ipv6Prefixes := make(map[string]*networkCounter)
 	ips := make(map[string]*PrivateIPUsage)
+	ipv6IPs := make(map[string]*PrivateIPUsage)
 	seenIPs := make(map[string]struct{})
 	usage := Usage{RegistrationTargets: make(map[string]string)}
 	for rows.Next() {
@@ -88,7 +96,8 @@ func (s *Store) UsageStats(ctx context.Context) (Usage, error) {
 		if usage.Since.IsZero() {
 			usage.Since = time.Unix(createdAt, 0).UTC()
 		}
-		usage.RegistrationTargets[id] = targetIP
+		canonicalIP := addr.String()
+		usage.RegistrationTargets[id] = canonicalIP
 		if challengeCount > 0 {
 			usage.ACMEActiveHostnames++
 		}
@@ -97,8 +106,8 @@ func (s *Store) UsageStats(ctx context.Context) (Usage, error) {
 			daily[date] = &DailyUsage{Date: date}
 		}
 		daily[date].Hostnames++
-		if _, exists := seenIPs[targetIP]; !exists {
-			seenIPs[targetIP] = struct{}{}
+		if _, exists := seenIPs[canonicalIP]; !exists {
+			seenIPs[canonicalIP] = struct{}{}
 			usage.PrivateIPs++
 			daily[date].PrivateIPs++
 		}
@@ -109,19 +118,29 @@ func (s *Store) UsageStats(ctx context.Context) (Usage, error) {
 			return Usage{}, fmt.Errorf("registration: usage address %q is not private", targetIP)
 		}
 		counter.hostnames++
-		counter.ips[targetIP] = struct{}{}
-		prefix := netip.PrefixFrom(addr, 24).Masked().String()
-		if prefixes[prefix] == nil {
-			prefixes[prefix] = &networkCounter{ips: make(map[string]struct{})}
+		counter.ips[canonicalIP] = struct{}{}
+		prefixBits := 24
+		if addr.Is6() {
+			prefixBits = 64
 		}
-		prefixes[prefix].hostnames++
-		prefixes[prefix].ips[targetIP] = struct{}{}
-		if ips[targetIP] == nil {
-			ips[targetIP] = &PrivateIPUsage{IP: targetIP}
+		prefix := netip.PrefixFrom(addr, prefixBits).Masked().String()
+		familyPrefixes := prefixes
+		familyIPs := ips
+		if addr.Is6() {
+			familyPrefixes = ipv6Prefixes
+			familyIPs = ipv6IPs
 		}
-		ips[targetIP].Hostnames++
+		if familyPrefixes[prefix] == nil {
+			familyPrefixes[prefix] = &networkCounter{ips: make(map[string]struct{})}
+		}
+		familyPrefixes[prefix].hostnames++
+		familyPrefixes[prefix].ips[canonicalIP] = struct{}{}
+		if familyIPs[canonicalIP] == nil {
+			familyIPs[canonicalIP] = &PrivateIPUsage{IP: canonicalIP}
+		}
+		familyIPs[canonicalIP].Hostnames++
 		if challengeCount > 0 {
-			ips[targetIP].ACMEActiveHostnames++
+			familyIPs[canonicalIP].ACMEActiveHostnames++
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -136,25 +155,43 @@ func (s *Store) UsageStats(ctx context.Context) (Usage, error) {
 		counter := blocks[network]
 		usage.Blocks = append(usage.Blocks, NetworkUsage{Network: network, Hostnames: counter.hostnames, PrivateIPs: uint64(len(counter.ips))})
 	}
-	for network, counter := range prefixes {
-		usage.Prefixes = append(usage.Prefixes, NetworkUsage{Network: network, Hostnames: counter.hostnames, PrivateIPs: uint64(len(counter.ips))})
-	}
-	sort.Slice(usage.Prefixes, func(i, j int) bool {
-		if usage.Prefixes[i].Hostnames != usage.Prefixes[j].Hostnames {
-			return usage.Prefixes[i].Hostnames > usage.Prefixes[j].Hostnames
-		}
-		return usage.Prefixes[i].Network < usage.Prefixes[j].Network
-	})
-	for _, item := range ips {
-		usage.IPs = append(usage.IPs, *item)
-	}
-	sort.Slice(usage.IPs, func(i, j int) bool {
-		if usage.IPs[i].Hostnames != usage.IPs[j].Hostnames {
-			return usage.IPs[i].Hostnames > usage.IPs[j].Hostnames
-		}
-		return usage.IPs[i].IP < usage.IPs[j].IP
-	})
+	counter := blocks[privateIPv6Block.String()]
+	usage.IPv6Blocks = append(usage.IPv6Blocks, NetworkUsage{Network: privateIPv6Block.String(), Hostnames: counter.hostnames, PrivateIPs: uint64(len(counter.ips))})
+	usage.Prefixes = sortedNetworkUsage(prefixes)
+	usage.IPv6Prefixes = sortedNetworkUsage(ipv6Prefixes)
+	usage.IPs = sortedIPUsage(ips)
+	usage.IPv6IPs = sortedIPUsage(ipv6IPs)
 	return usage, nil
+}
+
+func sortedNetworkUsage(prefixes map[string]*networkCounter) []NetworkUsage {
+	usage := make([]NetworkUsage, 0, len(prefixes))
+	for network, counter := range prefixes {
+		usage = append(usage, NetworkUsage{Network: network, Hostnames: counter.hostnames, PrivateIPs: uint64(len(counter.ips))})
+	}
+	sort.Slice(usage, func(i, j int) bool {
+		if usage[i].Hostnames != usage[j].Hostnames {
+			return usage[i].Hostnames > usage[j].Hostnames
+		}
+		return usage[i].Network < usage[j].Network
+	})
+	return usage
+}
+
+func sortedIPUsage(ips map[string]*PrivateIPUsage) []PrivateIPUsage {
+	usage := make([]PrivateIPUsage, 0, len(ips))
+	for _, item := range ips {
+		usage = append(usage, *item)
+	}
+	sort.Slice(usage, func(i, j int) bool { return privateIPUsageLess(usage[i], usage[j]) })
+	return usage
+}
+
+func privateIPUsageLess(left, right PrivateIPUsage) bool {
+	if left.Hostnames != right.Hostnames {
+		return left.Hostnames > right.Hostnames
+	}
+	return left.IP < right.IP
 }
 
 // CertificateRegistration is the public hostname needed to
@@ -188,6 +225,9 @@ func (s *Store) CertificateRegistrations(ctx context.Context) ([]CertificateRegi
 }
 
 func privateBlock(addr netip.Addr) string {
+	if privateIPv6Block.Contains(addr) {
+		return privateIPv6Block.String()
+	}
 	for _, block := range privateBlocks {
 		if block.Contains(addr) {
 			return block.String()

@@ -225,7 +225,7 @@ func TestPublicPages(t *testing.T) {
 		{"/docs/cli", []string{"CLI Quickstart", "Install the CLI", "brew install lucor/tap/lancert", "go install go.lucor.dev/lancert-cli/cmd/lancert@latest", "lancert 192.168.1.50", "Let’s Encrypt", "rate limits", "lancert renew", "Prefer another ACME client"}, nil},
 		{"/docs/acme-clients", []string{"Use your own ACME client", "Register the target IP", "one-time-secret", "Certbot", "Lego", "acme.sh", "Caddy", "Nginx", "Traefik", "Renew the certificate"}, nil},
 		{"/docs/api", []string{"api-reference", `data-url="/openapi.yaml"`, "Lancert v2"}, nil},
-		{"/status", []string{"lancert status", "Adoption", "Registered hostnames", "DNS-01 active", "New hostnames", "With a Let's Encrypt certificate", "Address patterns", "DNS activity", "Queries by local network", "Queries by private IP", "ACME client activity", "Certificate activity", "lancert-cli", "42"}, map[string]string{"Accept": "text/html"}},
+		{"/status", []string{"lancert status", "Adoption", "Registered hostnames", "DNS-01 active", "New hostnames", "With a Let's Encrypt certificate", "Address patterns", "IPv4", "IPv6 ULA", "IPv4 /24", "IPv6 /64", "ACME client activity", "Certificate activity", "lancert-cli", "42"}, map[string]string{"Accept": "text/html"}},
 		{"/openapi.yaml", []string{"openapi: 3.1.0", "/register/{ip}", "/update"}, nil},
 	}
 	for _, test := range tests {
@@ -335,17 +335,41 @@ func TestUsageTablesAddRegisteredDNSQueries(t *testing.T) {
 		{RegistrationID: "removed", Queries: 100},
 	}
 
-	prefixes, ips, dnsPrefixes, dnsIPs := usageTables(usage, lookups, 10)
+	ipv4, _ := usageTables(usage, lookups, 10)
 	assert.Equal(t, []networkUsageView{
 		{NetworkUsage: usage.Prefixes[0], DNSQueries30D: 25, Width: 67},
 		{NetworkUsage: usage.Prefixes[1], DNSQueries30D: 50, Width: 34},
-	}, prefixes)
+	}, ipv4.TopPrefixes)
 	assert.Equal(t, []privateIPUsageView{
 		{PrivateIPUsage: usage.IPs[0], DNSQueries30D: 25},
 		{PrivateIPUsage: usage.IPs[1], DNSQueries30D: 50},
-	}, ips)
-	assert.Equal(t, []networkUsageView{prefixes[1], prefixes[0]}, dnsPrefixes)
-	assert.Equal(t, []privateIPUsageView{ips[1], ips[0]}, dnsIPs)
+	}, ipv4.TopIPs)
+	assert.Equal(t, []networkUsageView{ipv4.TopPrefixes[1], ipv4.TopPrefixes[0]}, ipv4.DNSPrefixes)
+	assert.Equal(t, []privateIPUsageView{ipv4.TopIPs[1], ipv4.TopIPs[0]}, ipv4.DNSIPs)
+}
+
+func TestUsageTablesKeepIPv6QueriesSeparate(t *testing.T) {
+	usage := registration.Usage{
+		Hostnames: 1,
+		RegistrationTargets: map[string]string{
+			"ula": "fd12:3456:789a:1::25",
+		},
+		IPv6Prefixes: []registration.NetworkUsage{
+			{Network: "fd12:3456:789a:1::/64", Hostnames: 1, PrivateIPs: 1},
+		},
+		IPv6IPs: []registration.PrivateIPUsage{
+			{IP: "fd12:3456:789a:1::25", Hostnames: 1},
+		},
+	}
+	lookups := []metrics.RegistrationLookup{{RegistrationID: "ula", Queries: 9}}
+
+	ipv4, ipv6 := usageTables(usage, lookups, 10)
+	assert.Empty(t, ipv4.TopPrefixes)
+	assert.Empty(t, ipv4.TopIPs)
+	assert.Equal(t, uint64(9), ipv6.TopPrefixes[0].DNSQueries30D)
+	assert.Equal(t, uint64(9), ipv6.TopIPs[0].DNSQueries30D)
+	assert.Equal(t, uint64(9), ipv6.DNSPrefixes[0].DNSQueries30D)
+	assert.Equal(t, uint64(9), ipv6.DNSIPs[0].DNSQueries30D)
 }
 
 func TestReadinessLifecycleIsStickyDuringShutdown(t *testing.T) {

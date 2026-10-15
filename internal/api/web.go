@@ -64,11 +64,10 @@ type statusPageData struct {
 	Usage                    registration.Usage
 	RegistrationChart        []usageChartPoint
 	DNSChart                 []usageChartPoint
-	AddressBlocks            []networkUsageView
-	TopPrefixes              []networkUsageView
-	TopIPs                   []privateIPUsageView
-	DNSPrefixes              []networkUsageView
-	DNSIPs                   []privateIPUsageView
+	IPv4AddressBlocks        []networkUsageView
+	IPv6AddressBlocks        []networkUsageView
+	IPv4UsageTables          addressFamilyUsageTables
+	IPv6UsageTables          addressFamilyUsageTables
 	ClientFamilies           []metrics.ClientFamilyActivity
 	ActivationRate           string
 	NewHostnames7D           uint64
@@ -103,6 +102,13 @@ type networkUsageView struct {
 type privateIPUsageView struct {
 	registration.PrivateIPUsage
 	DNSQueries30D uint64
+}
+
+type addressFamilyUsageTables struct {
+	TopPrefixes []networkUsageView
+	TopIPs      []privateIPUsageView
+	DNSPrefixes []networkUsageView
+	DNSIPs      []privateIPUsageView
 }
 
 func mustEmbeddedAssets() http.Handler {
@@ -178,8 +184,9 @@ func (h *Handler) handleStatusPage(w http.ResponseWriter, r *http.Request) {
 			data.Usage = usage
 			data.ActivationRate, data.NewHostnames7D, data.NewHostnames30D = adoptionSummary(usage, snapshot.FreshAt)
 			data.RegistrationChart, data.DNSChart = usageCharts(usage.Daily, snapshot.DailyLookups, snapshot.FreshAt)
-			data.AddressBlocks = networkUsageViews(usage.Blocks, usage.Hostnames, nil)
-			data.TopPrefixes, data.TopIPs, data.DNSPrefixes, data.DNSIPs = usageTables(usage, snapshot.RegistrationLookups30D, 10)
+			data.IPv4AddressBlocks = networkUsageViews(usage.Blocks, totalHostnames(usage.Blocks), nil)
+			data.IPv6AddressBlocks = networkUsageViews(usage.IPv6Blocks, totalHostnames(usage.IPv6Blocks), nil)
+			data.IPv4UsageTables, data.IPv6UsageTables = usageTables(usage, snapshot.RegistrationLookups30D, 10)
 		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -267,11 +274,25 @@ func networkUsageViews(networks []registration.NetworkUsage, total uint64, queri
 	return views
 }
 
-func usageTables(usage registration.Usage, lookups []metrics.RegistrationLookup, limit int) ([]networkUsageView, []privateIPUsageView, []networkUsageView, []privateIPUsageView) {
+func totalHostnames(networks []registration.NetworkUsage) uint64 {
+	var total uint64
+	for _, network := range networks {
+		total += network.Hostnames
+	}
+	return total
+}
+
+func usageTables(usage registration.Usage, lookups []metrics.RegistrationLookup, limit int) (addressFamilyUsageTables, addressFamilyUsageTables) {
+	ipv4 := familyUsageTables(usage.Prefixes, usage.IPs, usage.RegistrationTargets, lookups, limit)
+	ipv6 := familyUsageTables(usage.IPv6Prefixes, usage.IPv6IPs, usage.RegistrationTargets, lookups, limit)
+	return ipv4, ipv6
+}
+
+func familyUsageTables(prefixes []registration.NetworkUsage, ips []registration.PrivateIPUsage, targets map[string]string, lookups []metrics.RegistrationLookup, limit int) addressFamilyUsageTables {
 	ipQueries := make(map[string]uint64)
 	prefixQueries := make(map[string]uint64)
 	for _, lookup := range lookups {
-		targetIP, found := usage.RegistrationTargets[lookup.RegistrationID]
+		targetIP, found := targets[lookup.RegistrationID]
 		if !found {
 			continue
 		}
@@ -280,15 +301,19 @@ func usageTables(usage registration.Usage, lookups []metrics.RegistrationLookup,
 			continue
 		}
 		ipQueries[targetIP] += lookup.Queries
-		prefixQueries[netip.PrefixFrom(addr, 24).Masked().String()] += lookup.Queries
+		prefixBits := 24
+		if addr.Is6() {
+			prefixBits = 64
+		}
+		prefixQueries[netip.PrefixFrom(addr, prefixBits).Masked().String()] += lookup.Queries
 	}
-	allPrefixes := networkUsageViews(usage.Prefixes, usage.Hostnames, prefixQueries)
+	allPrefixes := networkUsageViews(prefixes, totalHostnames(prefixes), prefixQueries)
 	topPrefixes := allPrefixes
 	if len(topPrefixes) > limit {
 		topPrefixes = topPrefixes[:limit]
 	}
-	allIPs := make([]privateIPUsageView, 0, len(usage.IPs))
-	for _, item := range usage.IPs {
+	allIPs := make([]privateIPUsageView, 0, len(ips))
+	for _, item := range ips {
 		allIPs = append(allIPs, privateIPUsageView{PrivateIPUsage: item, DNSQueries30D: ipQueries[item.IP]})
 	}
 	topIPs := allIPs
@@ -307,7 +332,12 @@ func usageTables(usage registration.Usage, lookups []metrics.RegistrationLookup,
 	})
 	dnsIPs = activePrivateIPUsage(dnsIPs, limit)
 
-	return topPrefixes, topIPs, dnsPrefixes, dnsIPs
+	return addressFamilyUsageTables{
+		TopPrefixes: topPrefixes,
+		TopIPs:      topIPs,
+		DNSPrefixes: dnsPrefixes,
+		DNSIPs:      dnsIPs,
+	}
 }
 
 func activeNetworkUsage(items []networkUsageView, limit int) []networkUsageView {

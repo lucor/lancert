@@ -193,6 +193,34 @@ func TestUsageStats(t *testing.T) {
 	}, usage.IPs)
 }
 
+func TestUsageStatsKeepsIPv6Separate(t *testing.T) {
+	s, err := Open(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
+
+	first, err := s.Register(context.Background(), netip.MustParseAddr("fd12:3456:789a:1::25"))
+	require.NoError(t, err)
+	_, err = s.Register(context.Background(), netip.MustParseAddr("fd12:3456:789a:1::25"))
+	require.NoError(t, err)
+	_, err = s.Register(context.Background(), netip.MustParseAddr("fd12:3456:789a:1::26"))
+	require.NoError(t, err)
+	require.NoError(t, updateChallenge(s, first.Username, first.Password, first.Hostname, challengeA))
+
+	usage, err := s.UsageStats(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, uint64(3), usage.Hostnames)
+	assert.Equal(t, uint64(2), usage.PrivateIPs)
+	assert.Equal(t, "fd12:3456:789a:1::25", usage.RegistrationTargets[first.ID])
+	assert.Equal(t, []NetworkUsage{{Network: "fd00::/8", Hostnames: 3, PrivateIPs: 2}}, usage.IPv6Blocks)
+	assert.Equal(t, []NetworkUsage{{Network: "fd12:3456:789a:1::/64", Hostnames: 3, PrivateIPs: 2}}, usage.IPv6Prefixes)
+	assert.Equal(t, []PrivateIPUsage{
+		{IP: "fd12:3456:789a:1::25", Hostnames: 2, ACMEActiveHostnames: 1},
+		{IP: "fd12:3456:789a:1::26", Hostnames: 1},
+	}, usage.IPv6IPs)
+	assert.Empty(t, usage.Prefixes)
+	assert.Empty(t, usage.IPs)
+}
+
 func TestRegisterAddsSuffixAfterPlainHostnameCollisions(t *testing.T) {
 	var suffixRequests int
 	hostnameGenerator := func(_ io.Reader, withSuffix bool) (string, error) {
