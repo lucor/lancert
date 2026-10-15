@@ -47,12 +47,9 @@ func TestPebbleLego(t *testing.T) {
 
 	httpServer := httptest.NewServer(New(store, "lancert.dev.", nil, nil))
 	t.Cleanup(httpServer.Close)
-	response, err := http.Post(httpServer.URL+"/register/192.168.44.10", "", nil)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = response.Body.Close() })
-	require.Equal(t, http.StatusCreated, response.StatusCode)
-	var account registrationResponse
-	require.NoError(t, json.NewDecoder(response.Body).Decode(&account))
+	ipv4Account := registerTarget(t, httpServer.URL, "192.168.44.10")
+	ipv6Target := "fd12:3456:789a:1::25"
+	ipv6Account := registerTarget(t, httpServer.URL, ipv6Target)
 
 	dnsAddr := availableDNSAddress(t)
 	dnsServer := dnssrv.New(dnssrv.Config{
@@ -80,7 +77,9 @@ func TestPebbleLego(t *testing.T) {
 			t.Error("timed out stopping Lancert DNS")
 		}
 	})
-	assertARecord(t, dnsAddr, account.Hostname+".", "192.168.44.10")
+	assertARecord(t, dnsAddr, ipv4Account.Hostname+".", "192.168.44.10")
+	assertAAAARecord(t, dnsAddr, ipv6Account.Hostname+".", ipv6Target)
+	assertAAAARecord(t, dnsAddr, "test."+ipv6Account.Hostname+".", ipv6Target)
 
 	pebbleOutput := &lockedBuffer{}
 	pebble := exec.Command("pebble", "-config", ".mise/pebble/config.json", "-dnsserver", dnsAddr)
@@ -91,6 +90,27 @@ func TestPebbleLego(t *testing.T) {
 	t.Cleanup(func() { stopProcess(t, pebble) })
 	waitForPebble(t, pebbleOutput)
 
+	for _, account := range []registrationResponse{ipv4Account, ipv6Account} {
+		t.Run(account.Hostname, func(t *testing.T) {
+			issueWithLego(t, repoRoot, httpServer.URL, dnsAddr, filepath.Join(repoRoot, ".mise", "pebble", "rootCA.pem"), account, store, pebbleOutput)
+		})
+	}
+	assert.NotContains(t, pebbleOutput.String(), "authorization failed")
+}
+
+func registerTarget(t *testing.T, apiURL, targetIP string) registrationResponse {
+	t.Helper()
+	response, err := http.Post(apiURL+"/register/"+targetIP, "", nil)
+	require.NoError(t, err)
+	defer response.Body.Close()
+	require.Equal(t, http.StatusCreated, response.StatusCode)
+	var account registrationResponse
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&account))
+	return account
+}
+
+func issueWithLego(t *testing.T, repoRoot, apiURL, dnsAddr, pebbleCACert string, account registrationResponse, store *registration.Store, pebbleOutput fmt.Stringer) {
+	t.Helper()
 	storagePath := filepath.Join(t.TempDir(), "acmedns.json")
 	storage := map[string]any{
 		account.Hostname: map[string]string{
@@ -98,7 +118,7 @@ func TestPebbleLego(t *testing.T) {
 			"subdomain":  account.Subdomain,
 			"username":   account.Username,
 			"password":   account.Password,
-			"server_url": httpServer.URL,
+			"server_url": apiURL,
 		},
 	}
 	storageJSON, err := json.Marshal(storage)
@@ -121,9 +141,9 @@ func TestPebbleLego(t *testing.T) {
 		"run",
 	)
 	lego.Env = append(os.Environ(),
-		"ACME_DNS_API_BASE="+httpServer.URL,
+		"ACME_DNS_API_BASE="+apiURL,
 		"ACME_DNS_STORAGE_PATH="+storagePath,
-		"LEGO_CA_CERTIFICATES="+filepath.Join(repoRoot, ".mise", "pebble", "rootCA.pem"),
+		"LEGO_CA_CERTIFICATES="+pebbleCACert,
 	)
 	output, err := lego.CombinedOutput()
 	require.NoError(t, err, "lego output:\n%s\npebble output:\n%s", output, pebbleOutput.String())
@@ -136,7 +156,6 @@ func TestPebbleLego(t *testing.T) {
 	assert.NotEqual(t, state.Challenges[0], state.Challenges[1])
 	assertTXTRecord(t, dnsAddr, account.FullDomain+".", state.Challenges[0])
 	assertTXTRecord(t, dnsAddr, account.FullDomain+".", state.Challenges[1])
-	assert.NotContains(t, pebbleOutput.String(), "authorization failed")
 }
 
 func availableDNSAddress(t *testing.T) string {
@@ -161,6 +180,18 @@ func assertARecord(t *testing.T, server, name, want string) {
 	record, ok := response.Answer[0].(*dns.A)
 	require.True(t, ok)
 	assert.Equal(t, want, record.A.String())
+}
+
+func assertAAAARecord(t *testing.T, server, name, want string) {
+	t.Helper()
+	message := new(dns.Msg)
+	message.SetQuestion(name, dns.TypeAAAA)
+	response, _, err := new(dns.Client).Exchange(message, server)
+	require.NoError(t, err)
+	require.Len(t, response.Answer, 1)
+	record, ok := response.Answer[0].(*dns.AAAA)
+	require.True(t, ok)
+	assert.Equal(t, netip.MustParseAddr(want).String(), record.AAAA.String())
 }
 
 func assertTXTRecord(t *testing.T, server, name, want string) {
