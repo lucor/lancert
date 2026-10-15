@@ -56,15 +56,25 @@ recovery, or rotation API.
 Hostname labels normally contain two curated words; a short suffix may appear
 after collisions. Treat the returned label as opaque and copy it exactly.
 
-The registration publishes:
+The registration publishes address records for the selected family. For IPv4:
 
 ```text
 quiet-otter.lancert.dev       A 192.168.1.50
 *.quiet-otter.lancert.dev     A 192.168.1.50
 ```
 
-Only RFC 1918 IPv4 targets are accepted. Public, loopback, link-local, CGNAT,
-and IPv6 targets are rejected.
+Lancert accepts RFC 1918 IPv4 targets and locally assigned IPv6 ULA targets in
+`fd00::/8`. Other IPv6 ranges, including globally routable addresses, are not
+accepted. Loopback, link-local, CGNAT, and other non-private IPv4 addresses
+are rejected.
+
+For an IPv6 target, Lancert publishes `AAAA` records for the registered
+hostname and its wildcard. For example:
+
+```bash
+curl --fail-with-body -X POST \
+  https://lancert.dev/register/fd12:3456:789a:1::25
+```
 
 For Lego, Certbot, acme.sh, and other compatible clients, see the
 [ACME client guide](https://lancert.dev/docs/acme-clients). The selected
@@ -73,9 +83,9 @@ certificate authority's terms, policies, and rate limits apply.
 ## Security model
 
 Each credential can update only the two most recent distinct TXT values at its
-assigned `_acme-challenge` owner. It cannot change A records, static zone data,
-or another registration. Passwords contain 240 random bits and are persisted
-only as domain-separated BLAKE2b-256 digests.
+assigned `_acme-challenge` owner. It cannot change A or AAAA records, static
+zone data, or another registration. Passwords contain 240 random bits and are
+persisted only as domain-separated BLAKE2b-256 digests.
 
 Challenge values are process-local, expire after 15 minutes, and are served
 with a one-second DNS TTL. They are never persisted and disappear on restart.

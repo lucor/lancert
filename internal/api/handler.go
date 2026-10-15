@@ -117,6 +117,7 @@ func (h *Handler) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request")
 		return
 	}
+	// PathValue decodes the segment, accepting both literal colons and %3A.
 	addr, err := privateip.Validate(r.PathValue("ip"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_ip")

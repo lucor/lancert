@@ -76,7 +76,7 @@
     <header class="page-header">
       <h1>Get a certificate with the CLI</h1>
       <p class="subtitle">One command gives a local app a trusted certificate. The CLI also keeps renewal simple.</p>
-      <div class="badges"><span class="badge">Lancert CLI</span><span class="badge">Private IPv4</span><span class="badge">Let’s Encrypt</span></div>
+      <div class="badges"><span class="badge">Lancert CLI</span><span class="badge">Private IPv4 + IPv6 ULA</span><span class="badge">Let’s Encrypt</span></div>
     </header>
     <div class="guide">
       <section class="step" id="install">
@@ -88,7 +88,7 @@
       </section>
       <section class="step" id="issue">
         <div class="step-head"><span class="step-number">02</span><h2>Get the certificate</h2></div>
-        <p>Pass the private IPv4 address of your local app:</p>
+        <p>Pass an RFC 1918 IPv4 address or a locally assigned IPv6 ULA in <code>fd00::/8</code> for your local app:</p>
         <div class="terminal"><div class="terminal-bar"><i class="r"></i><i class="y"></i><i class="g"></i><span class="terminal-title">Terminal</span></div><pre>lancert 192.168.1.50</pre></div>
         <p>On the first request, the CLI asks you to accept the certificate authority’s terms. It then prints the hostname and the paths to the certificate and private key.</p>
         <div class="terminal"><div class="terminal-bar"><i class="r"></i><i class="y"></i><i class="g"></i><span class="terminal-title">Output</span></div><pre>Certificate issued.

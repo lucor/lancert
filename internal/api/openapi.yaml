@@ -3,7 +3,8 @@ info:
   title: Lancert API
   version: 2.0.0
   description: |
-    Register an RFC 1918 IPv4 or locally assigned ULA IPv6 hostname and update its DNS-01 TXT record.
+    Register an RFC 1918 IPv4 or locally assigned ULA IPv6 target and update its DNS-01 TXT record.
+    IPv6 targets must be in fd00::/8; globally routable IPv6 targets are not supported.
     Lancert never issues, stores, or distributes certificates or private keys.
     Only POST /update is compatible with the acme-dns wire contract.
     Every response includes X-Lancert-API-Version. Version 2 is the current
@@ -21,6 +22,7 @@ paths:
           required: true
           schema:
             type: string
+            description: RFC 1918 IPv4 address or locally assigned IPv6 ULA in fd00::/8.
           examples:
             ipv4:
               value: 192.168.1.50

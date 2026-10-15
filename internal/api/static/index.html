@@ -120,6 +120,13 @@
     margin: 0 auto;
   }
 
+  .hero .address-support {
+    margin: 18px 0 0;
+    font-size: 14px;
+    color: var(--lan);
+    font-weight: 600;
+  }
+
   .suspension-banner {
     max-width: 992px;
     margin: 28px auto 0;
@@ -213,6 +220,33 @@
   .hero-terminal {
     max-width: 720px;
     margin: 48px auto 0;
+  }
+
+  .address-examples {
+    display: inline-flex;
+    gap: 4px;
+    padding: 4px;
+    margin-bottom: 16px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface);
+  }
+
+  .address-choice {
+    border: 0;
+    border-radius: 5px;
+    padding: 8px 16px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .address-choice[aria-pressed="true"] {
+    color: var(--bg);
+    background: var(--lan);
   }
 
   .hero-note {
@@ -573,8 +607,13 @@
 <header class="hero">
   <h1>Local HTTPS for private IP addresses.</h1>
   <p class="subtitle">Get browser-trusted TLS certificates for apps on your LAN. No domain, local CA, or DNS setup required.</p>
+  <p class="address-support">Works with private IPv4 and IPv6 ULA addresses.</p>
 
   <div class="hero-terminal">
+    <div class="address-examples" role="group" aria-label="Example address family">
+      <button type="button" class="address-choice" data-family="ipv4" aria-pressed="true">IPv4</button>
+      <button type="button" class="address-choice" data-family="ipv6" aria-pressed="false">IPv6 ULA</button>
+    </div>
     <div class="terminal">
       <div class="terminal-bar">
         <i class="r" aria-hidden="true"></i><i class="y" aria-hidden="true"></i><i class="g" aria-hidden="true"></i>
@@ -582,15 +621,15 @@
       </div>
       <div class="terminal-body">
         <span class="line"><span class="t-comment"># get a certificate for your local app</span></span>
-        <span class="line"><span class="t-ps">$ </span><span class="t-cmd">lancert </span><span class="t-url">192.168.1.50</span></span>
+        <span class="line"><span class="t-ps">$ </span><span class="t-cmd">lancert </span><span class="t-url" data-example-address>192.168.1.50</span></span>
         <span class="line"><span class="t-ok">Certificate issued.</span></span>
         <span class="line"><span class="t-res">Hostname: quiet-otter.lancert.dev</span></span>
         <span class="line"><span class="t-res">Certificate: ~/.config/lancert/certs/quiet-otter.lancert.dev/fullchain.pem</span></span>
         <span class="line"><span class="t-res">Private key: ~/.config/lancert/certs/quiet-otter.lancert.dev/privkey.pem</span></span>
         <div class="blank"></div>
         <span class="line"><span class="t-comment"># DNS already resolves to your LAN</span></span>
-        <span class="line"><span class="t-ps">$ </span><span class="t-cmd">dig </span><span class="t-dns">quiet-otter.lancert.dev</span><span class="t-cmd"> +short</span></span>
-        <span class="line"><span class="t-res">192.168.1.50</span></span>
+        <span class="line"><span class="t-ps">$ </span><span class="t-cmd">dig </span><span class="t-dns">quiet-otter.lancert.dev</span><span class="t-cmd"> <span data-example-record>A</span> +short</span></span>
+        <span class="line"><span class="t-res" data-example-address>192.168.1.50</span></span>
         <div class="blank"></div>
         <span class="line"><span class="t-comment"># done — valid HTTPS on your private IP</span></span>
         <span class="line"><span class="t-ps">$ </span><span class="t-cmd">curl </span><span class="t-url">https://quiet-otter.lancert.dev</span></span>
@@ -654,14 +693,14 @@
       <div class="timeline-mid"><div class="timeline-dot"></div><div class="timeline-line"></div></div>
       <div class="timeline-content">
         <h3>A hostname for your app</h3>
-        <p>The CLI registers your private IPv4 address and receives a random hostname under <code>lancert.dev</code>.</p>
+        <p>The CLI registers your private IPv4 address or IPv6 ULA and receives a random hostname under <code>lancert.dev</code>.</p>
       </div>
     </div>
     <div class="timeline-item">
       <div class="timeline-mid"><div class="timeline-dot"></div><div class="timeline-line"></div></div>
       <div class="timeline-content">
         <h3>Authoritative DNS</h3>
-        <p>Lancert points the assigned hostname and its wildcard to your private IPv4 address.</p>
+        <p>Lancert publishes an A record for IPv4 targets or an AAAA record for IPv6 ULA targets, for both the assigned hostname and its wildcard.</p>
       </div>
     </div>
     <div class="timeline-item">
@@ -744,7 +783,7 @@
   <div class="faq">
     <details>
       <summary>Which IP ranges are supported?</summary>
-      <p>Private IPv4 addresses in <code>10.0.0.0/8</code>, <code>172.16.0.0/12</code>, and <code>192.168.0.0/16</code>.</p>
+      <p>RFC 1918 IPv4 addresses in <code>10.0.0.0/8</code>, <code>172.16.0.0/12</code>, and <code>192.168.0.0/16</code>, plus locally assigned IPv6 ULA addresses in <code>fd00::/8</code>. Globally routable IPv6 addresses are not supported.</p>
     </details>
     <details>
       <summary>Do I need my own domain?</summary>
@@ -792,6 +831,22 @@
 </footer>
 
 <script>
+var heroTerminal = document.querySelector('.hero-terminal');
+heroTerminal.querySelectorAll('.address-choice').forEach(function(choice) {
+  choice.addEventListener('click', function() {
+    var ipv6 = choice.getAttribute('data-family') === 'ipv6';
+    var address = ipv6 ? 'fd12:3456:789a:1::25' : '192.168.1.50';
+    heroTerminal.querySelectorAll('.address-choice').forEach(function(button) {
+      button.setAttribute('aria-pressed', String(button === choice));
+    });
+    heroTerminal.querySelectorAll('[data-example-address]').forEach(function(element) {
+      element.textContent = address;
+    });
+    heroTerminal.querySelector('[data-example-record]').textContent = ipv6 ? 'AAAA' : 'A';
+    heroTerminal.querySelector('.copy-btn').setAttribute('data-copy', 'lancert ' + address);
+  });
+});
+
 document.querySelectorAll('.copy-btn').forEach(function(btn) {
   var origHTML = btn.innerHTML;
   var busy = false;

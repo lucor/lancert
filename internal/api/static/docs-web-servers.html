@@ -75,13 +75,13 @@
     <div class="breadcrumb"><a href="/docs">Documentation</a> / Use your own ACME client</div>
     <header class="page-header">
       <h1>Use your own ACME client</h1>
-      <p class="subtitle">Register a private IPv4 target with Lancert, obtain a certificate with your preferred ACME client, and configure your web server.</p>
-      <div class="badges"><span class="badge">Private IPv4</span><span class="badge">DNS-01</span><span class="badge">Exact + Wildcard</span></div>
+      <p class="subtitle">Register a private IPv4 or IPv6 ULA target with Lancert, obtain a certificate with your preferred ACME client, and configure your web server.</p>
+      <div class="badges"><span class="badge">Private IPv4 + IPv6 ULA</span><span class="badge">DNS-01</span><span class="badge">Exact + Wildcard</span></div>
     </header>
     <div class="guide">
       <section class="step" id="register">
         <div class="step-head"><span class="step-number">01</span><h2>Register the target IP</h2></div>
-        <p>The target is the private IPv4 address that Lancert will publish through DNS. Registration returns the hostname and scoped acme-dns credentials.</p>
+        <p>The target is an RFC 1918 IPv4 address or a locally assigned IPv6 ULA in <code>fd00::/8</code>. Lancert publishes an A or AAAA record for that address. Registration returns the hostname and scoped acme-dns credentials.</p>
         <div class="terminal"><div class="terminal-bar"><i class="r"></i><i class="y"></i><i class="g"></i><span class="terminal-title">Terminal</span></div><pre>curl --fail-with-body -X POST \
   https://lancert.dev/register/192.168.1.50</pre></div>
         <div class="terminal"><div class="terminal-bar"><i class="r"></i><i class="y"></i><i class="g"></i><span class="terminal-title">Response</span></div><pre>{
