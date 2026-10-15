@@ -130,6 +130,41 @@ func TestRegisteredAOwners(t *testing.T) {
 		assert.Equal(t, "192.168.1.50", record.A.String())
 		assert.Equal(t, uint32(300), record.Hdr.Ttl)
 	}
+	response := query(t, addr, testHostname+"."+testZone, dns.TypeAAAA)
+	assertAddressFamilyNODATA(t, response)
+}
+
+func TestRegisteredAAAAOwnersAndAddressFamilyNODATA(t *testing.T) {
+	_, addr, state := startTestServer(t, nil)
+	ula := netip.MustParseAddr("fd12:3456:789a:1::25")
+	state.mu.Lock()
+	registration := state.records[testHostname]
+	registration.TargetIP = ula
+	state.records[testHostname] = registration
+	state.mu.Unlock()
+
+	for _, name := range []string{
+		testHostname + ".lancert.dev.",
+		"app." + testHostname + ".lancert.dev.",
+	} {
+		response := query(t, addr, name, dns.TypeAAAA)
+		require.Len(t, response.Answer, 1)
+		record, ok := response.Answer[0].(*dns.AAAA)
+		require.True(t, ok)
+		assert.Equal(t, ula, netip.MustParseAddr(record.AAAA.String()))
+		assert.Equal(t, uint32(registrationTTL), record.Hdr.Ttl)
+
+		response = query(t, addr, name, dns.TypeA)
+		assertAddressFamilyNODATA(t, response)
+	}
+}
+
+func assertAddressFamilyNODATA(t *testing.T, response *dns.Msg) {
+	t.Helper()
+	assert.Equal(t, dns.RcodeSuccess, response.Rcode)
+	assert.Empty(t, response.Answer)
+	require.Len(t, response.Ns, 1)
+	assert.IsType(t, &dns.SOA{}, response.Ns[0])
 }
 
 func TestRegistrationOwnerBoundaries(t *testing.T) {

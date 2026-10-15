@@ -163,6 +163,7 @@ type owner struct {
 	static       StaticTXTRecord
 }
 
+// answer resolves one zone question and adds its authoritative answer or negative response.
 func (s *Server) answer(msg *dns.Msg, q dns.Question) owner {
 	resolved := s.resolveOwner(strings.ToLower(q.Name))
 	if resolved.kind == ownerUnknown {
@@ -173,6 +174,8 @@ func (s *Server) answer(msg *dns.Msg, q dns.Question) owner {
 	switch q.Qtype {
 	case dns.TypeA:
 		s.answerA(msg, q, resolved)
+	case dns.TypeAAAA:
+		s.answerAAAA(msg, q, resolved)
 	case dns.TypeTXT:
 		s.answerTXT(msg, q, resolved)
 	case dns.TypeMX:
@@ -237,15 +240,29 @@ func (s *Server) resolveOwner(name string) owner {
 	return owner{kind: kind, registration: registered}
 }
 
+// answerA publishes IPv4 targets and returns NODATA for registered IPv6 targets.
 func (s *Server) answerA(msg *dns.Msg, q dns.Question, resolved owner) {
 	switch resolved.kind {
 	case ownerApex, ownerNameserver:
 		s.appendA(msg, q.Name, s.config.ServerIP)
 	case ownerRegistration, ownerWildcard:
-		s.appendA(msg, q.Name, resolved.registration.TargetIP)
+		if resolved.registration.TargetIP.Is4() {
+			s.appendA(msg, q.Name, resolved.registration.TargetIP)
+		} else {
+			s.negative(msg, false)
+		}
 	default:
 		s.negative(msg, false)
 	}
+}
+
+// answerAAAA publishes IPv6 targets and returns NODATA for registered IPv4 targets.
+func (s *Server) answerAAAA(msg *dns.Msg, q dns.Question, resolved owner) {
+	if (resolved.kind == ownerRegistration || resolved.kind == ownerWildcard) && resolved.registration.TargetIP.Is6() {
+		s.appendAAAA(msg, q.Name, resolved.registration.TargetIP)
+		return
+	}
+	s.negative(msg, false)
 }
 
 func (s *Server) answerTXT(msg *dns.Msg, q dns.Question, resolved owner) {
@@ -298,6 +315,14 @@ func (s *Server) appendA(msg *dns.Msg, name string, addr netip.Addr) {
 	msg.Answer = append(msg.Answer, &dns.A{
 		Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: registrationTTL},
 		A:   net.IP(addr.AsSlice()),
+	})
+}
+
+// appendAAAA appends an IPv6 address record using the registration TTL.
+func (s *Server) appendAAAA(msg *dns.Msg, name string, addr netip.Addr) {
+	msg.Answer = append(msg.Answer, &dns.AAAA{
+		Hdr:  dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: registrationTTL},
+		AAAA: net.IP(addr.AsSlice()),
 	})
 }
 
