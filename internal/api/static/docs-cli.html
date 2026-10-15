@@ -88,8 +88,33 @@
       </section>
       <section class="step" id="issue">
         <div class="step-head"><span class="step-number">02</span><h2>Get the certificate</h2></div>
-        <p>Pass an RFC 1918 IPv4 address or a locally assigned IPv6 ULA in <code>fd00::/8</code> for your local app:</p>
-        <div class="terminal"><div class="terminal-bar"><i class="r"></i><i class="y"></i><i class="g"></i><span class="terminal-title">Terminal</span></div><pre>lancert 192.168.1.50</pre></div>
+        <p>Choose how to provide the address of your local app:</p>
+        <div class="tabs" data-tabs>
+          <div class="tab-list" role="tablist" aria-label="Target address">
+            <button class="tab" role="tab" id="target-discovery-tab" aria-controls="target-discovery" aria-selected="true">Discover</button>
+            <button class="tab" role="tab" id="target-ipv4-tab" aria-controls="target-ipv4" aria-selected="false">IPv4</button>
+            <button class="tab" role="tab" id="target-ipv6-tab" aria-controls="target-ipv6" aria-selected="false">IPv6 ULA</button>
+          </div>
+          <section class="tab-panel" id="target-discovery" role="tabpanel" aria-labelledby="target-discovery-tab">
+            <p>Run the CLI without an address to see supported addresses on active network interfaces and how to select one:</p>
+            <div class="terminal"><div class="terminal-bar"><i class="r"></i><i class="y"></i><i class="g"></i><span class="terminal-title">Terminal</span></div><pre>$ lancert
+Detected private IP addresses:
+
+  172.17.15.11 (utun4)
+  192.168.0.9  (en0)
+
+Choose the address where your application is reachable, then run:
+  lancert &lt;address&gt;</pre></div>
+          </section>
+          <section class="tab-panel" id="target-ipv4" role="tabpanel" aria-labelledby="target-ipv4-tab" hidden>
+            <p>Pass an RFC 1918 IPv4 address:</p>
+            <div class="terminal"><div class="terminal-bar"><i class="r"></i><i class="y"></i><i class="g"></i><span class="terminal-title">Terminal</span></div><pre>lancert 192.168.1.50</pre></div>
+          </section>
+          <section class="tab-panel" id="target-ipv6" role="tabpanel" aria-labelledby="target-ipv6-tab" hidden>
+            <p>Pass a locally assigned IPv6 ULA in <code>fd00::/8</code>:</p>
+            <div class="terminal"><div class="terminal-bar"><i class="r"></i><i class="y"></i><i class="g"></i><span class="terminal-title">Terminal</span></div><pre>lancert fd12:3456:789a:1::25</pre></div>
+          </section>
+        </div>
         <p>On the first request, the CLI asks you to accept the certificate authority’s terms. It then prints the hostname and the paths to the certificate and private key.</p>
         <div class="terminal"><div class="terminal-bar"><i class="r"></i><i class="y"></i><i class="g"></i><span class="terminal-title">Output</span></div><pre>Certificate issued.
 Hostname: quiet-otter.lancert.dev
