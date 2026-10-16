@@ -1,44 +1,70 @@
 # lancert
 
 Lancert helps you get a trusted HTTPS certificate for an app on your private
-network. It provides a public hostname and handles the DNS challenge required
-by the certificate authority.
+network, with support for **private IPv4 and locally assigned IPv6 ULA addresses**.
+You do not need to own a domain or configure a DNS provider.
 
-This is the standard ACME DNS-01 flow. You can set it up with your own domain
-and DNS provider; Lancert provides the DNS service for developers who do not
-have or do not want to configure one.
-
-Lancert does **not** store certificates or private keys. Your ACME client keeps
-them on your machine.
+Lancert assigns a public hostname that resolves to your private IP address and
+handles the DNS records required by the standard ACME DNS-01 challenge. Your
+ACME client keeps certificates and private keys on your machine.
 
 ## Use the Lancert CLI
 
-The [Lancert CLI](https://github.com/lucor/lancert-cli) is the quickest path:
+Install the [Lancert CLI](https://github.com/lucor/lancert-cli) with Homebrew:
 
 ```console
 brew install lucor/tap/lancert
-lancert 192.168.1.50
 ```
 
 You can also install the CLI from source with
 `go install go.lucor.dev/lancert-cli/cmd/lancert@latest`.
 
-The CLI currently uses Let's Encrypt by default. Let's Encrypt terms, policies,
-and rate limits apply. Run `lancert renew` regularly to renew locally managed
-certificates. Use `lancert list` to inspect all managed certificates.
+Request a certificate for the address where your app is reachable:
+
+```console
+# IPv4
+lancert 192.168.1.50
+
+# IPv6 ULA
+lancert fd12:3456:789a:1::25
+```
+
+Run `lancert` without an address to list supported addresses on your machine.
+Use `lancert list` to inspect managed certificates and run `lancert renew`
+regularly to renew them. The CLI uses Let's Encrypt by default; its terms,
+policies, and rate limits apply.
+
+See the [CLI guide](https://lancert.dev/docs/cli) for certificate paths,
+renewal, and web server setup.
+
+## Supported addresses
+
+| Target | Accepted ranges | DNS records |
+| --- | --- | --- |
+| Private IPv4 | `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` (RFC 1918) | `A` |
+| Locally assigned IPv6 ULA | `fd00::/8` | `AAAA` |
+
+Each registration publishes records for its assigned hostname and wildcard,
+such as `quiet-otter.lancert.dev` and `*.quiet-otter.lancert.dev`, using the
+registered address family. Other address ranges are rejected, including public,
+loopback, link-local, and CGNAT addresses.
 
 ## Use your own ACME client
 
 Lego, Certbot, acme.sh, and other clients that support an acme-dns-compatible
-API also work with Lancert. This path needs a few extra setup steps.
-
-### Register a hostname
-
-Registration accepts no request body and returns credentials only once:
+API also work with Lancert. First, register your app's private address using
+one of these requests. No request body is needed:
 
 ```bash
+# IPv4
 curl --fail-with-body -X POST https://lancert.dev/register/192.168.1.50
+
+# IPv6 ULA
+curl --fail-with-body -X POST \
+  https://lancert.dev/register/fd12:3456:789a:1::25
 ```
+
+A successful registration returns:
 
 ```json
 {
@@ -50,42 +76,19 @@ curl --fail-with-body -X POST https://lancert.dev/register/192.168.1.50
 }
 ```
 
-Save the complete response securely. Lancert has no credential lookup,
-recovery, or rotation API.
+Save the complete response securely: credentials are returned only once, and
+there is no lookup, recovery, or rotation API. Use the returned hostname exactly
+as provided.
 
-Hostname labels normally contain two curated words; a short suffix may appear
-after collisions. Treat the returned label as opaque and copy it exactly.
-
-The registration publishes address records for the selected family. For IPv4:
-
-```text
-quiet-otter.lancert.dev       A 192.168.1.50
-*.quiet-otter.lancert.dev     A 192.168.1.50
-```
-
-Lancert accepts RFC 1918 IPv4 targets and locally assigned IPv6 ULA targets in
-`fd00::/8`. Other IPv6 ranges, including globally routable addresses, are not
-accepted. Loopback, link-local, CGNAT, and other non-private IPv4 addresses
-are rejected.
-
-For an IPv6 target, Lancert publishes `AAAA` records for the registered
-hostname and its wildcard. For example:
-
-```bash
-curl --fail-with-body -X POST \
-  https://lancert.dev/register/fd12:3456:789a:1::25
-```
-
-For Lego, Certbot, acme.sh, and other compatible clients, see the
-[ACME client guide](https://lancert.dev/docs/acme-clients). The selected
-certificate authority's terms, policies, and rate limits apply.
+Then follow the [ACME client guide](https://lancert.dev/docs/acme-clients) to
+configure your client and request the certificate. The selected certificate
+authority's terms, policies, and rate limits apply.
 
 ## Security model
 
-Each credential can update only the two most recent distinct TXT values at its
-assigned `_acme-challenge` owner. It cannot change A or AAAA records, static
-zone data, or another registration. Passwords contain 240 random bits and are
-persisted only as domain-separated BLAKE2b-256 digests.
+Each credential can update only the DNS challenge TXT values for its assigned
+hostname. It cannot change A or AAAA records, static zone data, or another
+registration. Passwords are stored only as cryptographic digests.
 
 Challenge values are process-local, expire after 15 minutes, and are served
 with a one-second DNS TTL. They are never persisted and disappear on restart.
@@ -105,49 +108,23 @@ LANCERT_IP_HASH_SALT="$(openssl rand -hex 32)" \
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `-server-ip` | required | Public IPv4 for zone apex and nameserver glue |
+| `-server-ip` | required | Public IPv4 of the DNS service, used for zone apex and nameserver glue |
 | `-dns-addr` | `:53` | Authoritative UDP/TCP DNS listen address |
 | `-http-addr` | `:8443` | HTTP listen address, normally behind HTTPS ingress |
 | `-data-dir` | `data` | Directory containing `core.db` and `metrics.db` |
 
 `core.db` is essential and fail-closed. It must be stored on a durable private
 volume and backed up with a SQLite-consistent method. `metrics.db` is
-observational and fail-open. It includes bounded User-Agent diagnostics for
-authenticated, accepted DNS-01 updates; these values are not exposed by the
-status endpoints. Lancert v2 does not migrate v1 data; deploy it with a new data
-volume.
+observational and fail-open.
 
 See [`.env.example`](.env.example) for all environment variables and
 [`internal/api/openapi.yaml`](internal/api/openapi.yaml) for the HTTP contract.
 
-### Static TXT records
-
-`LANCERT_STATIC_TXT` publishes declarative verification records. Names are
-relative to `LANCERT_ZONE`; `@` is the apex:
-
-```env
-LANCERT_STATIC_TXT='{"@":{"ttl":300,"values":["verification-value"]}}'
-```
-
-Dynamic challenge owners are reserved. Configuration changes require restart.
-
-### Static MX records
-
-`LANCERT_STATIC_MX` publishes mail routes using the same owner names as static
-TXT records. Exchanges are absolute mail server names; a trailing dot is optional.
-Use the records supplied by your email provider:
-
-```env
-LANCERT_STATIC_MX='{"@":{"ttl":300,"records":[{"preference":10,"exchange":"mx1.example.net."},{"preference":20,"exchange":"mx2.example.net."}]}}'
-```
-
-The default TTL is 300 seconds. Configuration changes require restart.
-
-### Certificate metrics
-
-The status page includes certificate metrics observed in public Certificate
-Transparency logs. Configure `SSLMATE_API_KEY` to enable them; monitoring
-delays do not affect DNS or registration service availability.
+Optional configuration includes static TXT verification records
+(`LANCERT_STATIC_TXT`), MX mail routes (`LANCERT_STATIC_MX`), and certificate
+metrics from public Certificate Transparency logs (`SSLMATE_API_KEY`).
+The static record formats and examples are in [`.env.example`](.env.example);
+configuration changes require a restart.
 
 ## Development
 
