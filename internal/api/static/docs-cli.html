@@ -81,7 +81,9 @@
     <div class="guide">
       <section class="step" id="install">
         <div class="step-head"><span class="step-number">01</span><h2>Install the CLI</h2></div>
-        <p>Install the current CLI with Homebrew:</p>
+        <p>The CLI supports macOS, Linux, and Windows on amd64 and arm64.</p>
+        <p>Download a prebuilt binary from the <a href="https://github.com/lucor/lancert-cli/releases">GitHub releases page</a>. Choose the archive for your operating system and architecture: <code>.tar.gz</code> for macOS or Linux, or <code>.zip</code> for Windows. Extract it and add the directory containing <code>lancert</code> (or <code>lancert.exe</code> on Windows) to your <code>PATH</code>.</p>
+        <p>On macOS or Linux, you can also install with Homebrew:</p>
         <div class="terminal"><div class="terminal-bar"><i class="r"></i><i class="y"></i><i class="g"></i><span class="terminal-title">Terminal</span></div><pre>brew install lucor/tap/lancert</pre></div>
         <p>Or install it from source with Go:</p>
         <div class="terminal"><div class="terminal-bar"><i class="r"></i><i class="y"></i><i class="g"></i><span class="terminal-title">Terminal</span></div><pre>go install go.lucor.dev/lancert-cli/cmd/lancert@latest</pre></div>
@@ -120,6 +122,7 @@ Choose the address where your application is reachable, then run:
 Hostname: quiet-otter.lancert.dev
 Certificate: /home/alice/.config/lancert/certs/quiet-otter.lancert.dev/fullchain.pem
 Private key: /home/alice/.config/lancert/certs/quiet-otter.lancert.dev/privkey.pem</pre></div>
+        <p>The example paths above are for Linux. On Windows, the CLI stores its data under <code>%AppData%\lancert</code>; on macOS, under <code>~/Library/Application Support/lancert</code>. Use the paths printed on your machine.</p>
         <div class="callout"><strong>Let’s Encrypt is the default.</strong> Its terms, policies, and rate limits apply. Use <code>--acme-directory</code> to select another ACME-compatible certificate authority.</div>
         <p>The certificate covers the assigned hostname and its wildcard. Your ACME account, certificate, and private key stay on your machine.</p>
       </section>
@@ -153,7 +156,7 @@ Private key: /home/alice/.config/lancert/certs/quiet-otter.lancert.dev/privkey.p
       </section>
       <section class="step" id="renew">
         <div class="step-head"><span class="step-number">04</span><h2>Renew the certificate</h2></div>
-        <p>Run the CLI renewal command regularly from cron, systemd, or launchd:</p>
+        <p>Schedule the CLI renewal command with cron or systemd on Linux, launchd on macOS, or Task Scheduler on Windows:</p>
         <div class="terminal"><div class="terminal-bar"><i class="r"></i><i class="y"></i><i class="g"></i><span class="terminal-title">Terminal</span></div><pre>lancert renew</pre></div>
         <p>The CLI checks every locally managed certificate and renews those that are due.</p>
       </section>
