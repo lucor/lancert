@@ -1,4 +1,4 @@
-FROM golang:1.27-alpine AS builder
+FROM golang:1.27.3-alpine3.24 AS builder
 
 WORKDIR /build
 
@@ -19,7 +19,7 @@ RUN CGO_ENABLED=0 go build -trimpath \
 
 RUN mkdir /data && chown 65532:65532 /data
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian13:nonroot
 
 COPY --from=builder /build/lancert /usr/local/bin/lancert
 COPY --from=builder /build/healthcheck /usr/local/bin/healthcheck
