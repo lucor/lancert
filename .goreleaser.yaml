@@ -1,0 +1,13 @@
+version: 2
+project_name: lancert
+
+builds:
+  - skip: true
+
+changelog:
+  use: git
+  abbrev: 7
+
+release:
+  header: |
+    Lancert is available as a container image at `ghcr.io/lucor/lancert:{{ .Tag }}`.
