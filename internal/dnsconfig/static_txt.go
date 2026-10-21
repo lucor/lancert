@@ -7,7 +7,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 
 	"go.lucor.dev/lancert/internal/dnssrv"
 )
@@ -38,7 +38,7 @@ func ParseStaticTXT(raw, zone string) (map[string]dnssrv.StaticTXTRecord, error)
 		return nil, fmt.Errorf("invalid LANCERT_STATIC_TXT: at least one record is required")
 	}
 
-	zone = strings.ToLower(dns.Fqdn(zone))
+	zone = strings.ToLower(dnsutil.Fqdn(zone))
 	records := make(map[string]dnssrv.StaticTXTRecord, len(configured))
 	for configuredName, configuredRecord := range configured {
 		name, err := staticRecordFQDN(configuredName, zone)
@@ -81,10 +81,10 @@ func staticRecordFQDN(configuredName, zone string) (string, error) {
 	case strings.HasSuffix(name, "."):
 		// Already an FQDN.
 	default:
-		name = dns.Fqdn(name + "." + strings.TrimSuffix(zone, "."))
+		name = dnsutil.Fqdn(name + "." + strings.TrimSuffix(zone, "."))
 	}
 
-	if _, ok := dns.IsDomainName(name); !ok {
+	if !dnsutil.IsName(dnsutil.Fqdn(name)) {
 		return "", fmt.Errorf("not a valid DNS name")
 	}
 	if name != zone && !strings.HasSuffix(name, "."+zone) {

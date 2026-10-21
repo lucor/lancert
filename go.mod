@@ -3,9 +3,9 @@ module go.lucor.dev/lancert
 go 1.27.0
 
 require (
+	codeberg.org/miekg/dns v0.6.118
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/joho/godotenv v1.5.1
-	github.com/miekg/dns v1.1.72
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/crypto v0.58.0
 	golang.org/x/time v0.15.0

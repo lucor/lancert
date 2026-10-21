@@ -7,7 +7,7 @@ import (
 	"net/netip"
 	"strings"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 
 	"go.lucor.dev/lancert/internal/dnssrv"
 )
@@ -39,7 +39,7 @@ func ParseStaticMX(raw, zone string) (map[string]dnssrv.StaticMXRecord, error) {
 		return nil, fmt.Errorf("invalid LANCERT_STATIC_MX: at least one record is required")
 	}
 
-	zone = strings.ToLower(dns.Fqdn(zone))
+	zone = strings.ToLower(dnsutil.Fqdn(zone))
 	records := make(map[string]dnssrv.StaticMXRecord, len(configured))
 	for configuredName, configuredRecord := range configured {
 		name, err := staticRecordFQDN(configuredName, zone)
@@ -58,7 +58,7 @@ func ParseStaticMX(raw, zone string) (map[string]dnssrv.StaticMXRecord, error) {
 			if exchange == "" {
 				return nil, fmt.Errorf("invalid LANCERT_STATIC_MX record %q: exchange must not be empty", configuredName)
 			}
-			if _, ok := dns.IsDomainName(exchange); !ok {
+			if !dnsutil.IsName(dnsutil.Fqdn(exchange)) {
 				return nil, fmt.Errorf("invalid LANCERT_STATIC_MX record %q: exchange %q is not a valid DNS name", configuredName, record.Exchange)
 			}
 			if _, err := netip.ParseAddr(strings.TrimSuffix(exchange, ".")); err == nil {
@@ -71,7 +71,7 @@ func ParseStaticMX(raw, zone string) (map[string]dnssrv.StaticMXRecord, error) {
 			if exchange == "." && (record.Preference != 0 || len(configuredRecord.Records) != 1) {
 				return nil, fmt.Errorf("invalid LANCERT_STATIC_MX record %q: null MX must be the sole record with preference 0", configuredName)
 			}
-			record.Exchange = dns.Fqdn(exchange)
+			record.Exchange = dnsutil.Fqdn(exchange)
 		}
 		ttl := defaultStaticMXTTL
 		if configuredRecord.TTL != nil {

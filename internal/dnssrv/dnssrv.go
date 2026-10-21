@@ -2,6 +2,7 @@
 package dnssrv
 
 import (
+	"context"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -9,7 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
+	"codeberg.org/miekg/dns/rdata"
 
 	"go.lucor.dev/lancert/internal/registration"
 )
@@ -82,14 +85,14 @@ func New(cfg Config, state RegistrationView) *Server {
 
 // ListenAndServe starts UDP and TCP listeners. It calls ready after both bind.
 func (s *Server) ListenAndServe(addr string, ready func()) error {
-	s.udp = &dns.Server{Addr: addr, Net: "udp", Handler: s.mux}
-	s.tcp = &dns.Server{Addr: addr, Net: "tcp", Handler: s.mux}
+	s.udp = &dns.Server{Addr: addr, Net: "udp", Handler: s.mux, MsgAcceptFunc: s.acceptQuery}
+	s.tcp = &dns.Server{Addr: addr, Net: "tcp", Handler: s.mux, MsgAcceptFunc: s.acceptQuery}
 
 	errCh := make(chan error, 2)
 	var wg sync.WaitGroup
 	wg.Add(2)
-	s.udp.NotifyStartedFunc = func() { wg.Done() }
-	s.tcp.NotifyStartedFunc = func() { wg.Done() }
+	s.udp.NotifyStartedFunc = func(context.Context) { wg.Done() }
+	s.tcp.NotifyStartedFunc = func(context.Context) { wg.Done() }
 	go func() { errCh <- s.udp.ListenAndServe() }()
 	go func() { errCh <- s.tcp.ListenAndServe() }()
 
@@ -108,24 +111,32 @@ func (s *Server) ListenAndServe(addr string, ready func()) error {
 
 // Shutdown gracefully shuts down both listeners.
 func (s *Server) Shutdown() error {
-	var firstErr error
 	if s.udp != nil {
-		if err := s.udp.Shutdown(); err != nil {
-			firstErr = err
-		}
+		s.udp.Shutdown(context.Background())
 	}
 	if s.tcp != nil {
-		if err := s.tcp.Shutdown(); err != nil && firstErr == nil {
-			firstErr = err
-		}
+		s.tcp.Shutdown(context.Background())
 	}
-	return firstErr
+	return nil
 }
 
-func (s *Server) handleQuery(w dns.ResponseWriter, request *dns.Msg) {
+// acceptQuery applies the library's request checks and clears multiple questions
+// from rejected requests so the library can pack a FORMERR response.
+func (s *Server) acceptQuery(msg *dns.Msg) dns.MsgAcceptAction {
+	action := dns.DefaultMsgAcceptFunc(msg)
+	if action == dns.MsgReject && len(msg.Question) > 1 {
+		// The library only sizes packed messages for one question. Clear invalid
+		// questions so its rejection path can send FORMERR instead of dropping it.
+		msg.Question = nil
+	}
+	return action
+}
+
+// handleQuery writes an authoritative response and records the query and write result.
+func (s *Server) handleQuery(_ context.Context, w dns.ResponseWriter, request *dns.Msg) {
 	started := time.Now()
-	response := new(dns.Msg)
-	response.SetReply(request)
+	// Reuse the request so WriteTo returns its buffer to the server pool.
+	response := dnsutil.SetReply(request, request)
 	response.Authoritative = true
 
 	var registrationID string
@@ -135,7 +146,10 @@ func (s *Server) handleQuery(w dns.ResponseWriter, request *dns.Msg) {
 		registrationID = s.answer(response, request.Question[0]).registration.ID
 	}
 
-	err := w.WriteMsg(response)
+	err := response.Pack()
+	if err == nil {
+		_, err = response.WriteTo(w)
+	}
 	if s.recorder != nil {
 		s.recorder.RecordDNSQuery(registrationID)
 		s.recorder.RecordResponse(err == nil, time.Since(started))
@@ -164,14 +178,14 @@ type owner struct {
 }
 
 // answer resolves one zone question and adds its authoritative answer or negative response.
-func (s *Server) answer(msg *dns.Msg, q dns.Question) owner {
-	resolved := s.resolveOwner(strings.ToLower(q.Name))
+func (s *Server) answer(msg *dns.Msg, q dns.RR) owner {
+	resolved := s.resolveOwner(strings.ToLower(q.Header().Name))
 	if resolved.kind == ownerUnknown {
 		s.negative(msg, true)
 		return resolved
 	}
 
-	switch q.Qtype {
+	switch dns.RRToType(q) {
 	case dns.TypeA:
 		s.answerA(msg, q, resolved)
 	case dns.TypeAAAA:
@@ -188,7 +202,7 @@ func (s *Server) answer(msg *dns.Msg, q dns.Question) owner {
 		}
 	case dns.TypeNS:
 		if resolved.kind == ownerApex {
-			s.appendNS(msg, q.Name)
+			s.appendNS(msg, q.Header().Name)
 		} else {
 			s.negative(msg, false)
 		}
@@ -198,6 +212,8 @@ func (s *Server) answer(msg *dns.Msg, q dns.Question) owner {
 	return resolved
 }
 
+// resolveOwner classifies a lowercase absolute name and looks up its static
+// records or registration. Unrecognized names return ownerUnknown.
 func (s *Server) resolveOwner(name string) owner {
 	if name == strings.ToLower(s.config.Zone) {
 		return owner{kind: ownerApex, static: s.config.StaticTXT[name]}
@@ -241,13 +257,13 @@ func (s *Server) resolveOwner(name string) owner {
 }
 
 // answerA publishes IPv4 targets and returns NODATA for registered IPv6 targets.
-func (s *Server) answerA(msg *dns.Msg, q dns.Question, resolved owner) {
+func (s *Server) answerA(msg *dns.Msg, q dns.RR, resolved owner) {
 	switch resolved.kind {
 	case ownerApex, ownerNameserver:
-		s.appendA(msg, q.Name, s.config.ServerIP)
+		s.appendA(msg, q.Header().Name, s.config.ServerIP)
 	case ownerRegistration, ownerWildcard:
 		if resolved.registration.TargetIP.Is4() {
-			s.appendA(msg, q.Name, resolved.registration.TargetIP)
+			s.appendA(msg, q.Header().Name, resolved.registration.TargetIP)
 		} else {
 			s.negative(msg, false)
 		}
@@ -257,19 +273,20 @@ func (s *Server) answerA(msg *dns.Msg, q dns.Question, resolved owner) {
 }
 
 // answerAAAA publishes IPv6 targets and returns NODATA for registered IPv4 targets.
-func (s *Server) answerAAAA(msg *dns.Msg, q dns.Question, resolved owner) {
+func (s *Server) answerAAAA(msg *dns.Msg, q dns.RR, resolved owner) {
 	if (resolved.kind == ownerRegistration || resolved.kind == ownerWildcard) && resolved.registration.TargetIP.Is6() {
-		s.appendAAAA(msg, q.Name, resolved.registration.TargetIP)
+		s.appendAAAA(msg, q.Header().Name, resolved.registration.TargetIP)
 		return
 	}
 	s.negative(msg, false)
 }
 
-func (s *Server) answerTXT(msg *dns.Msg, q dns.Question, resolved owner) {
+// answerTXT publishes challenge or static TXT values, or returns NODATA when absent.
+func (s *Server) answerTXT(msg *dns.Msg, q dns.RR, resolved owner) {
 	if resolved.kind == ownerChallenge {
 		for _, value := range resolved.registration.Challenges {
 			if value != "" {
-				s.appendTXT(msg, q.Name, challengeTTL, value)
+				s.appendTXT(msg, q.Header().Name, challengeTTL, value)
 			}
 		}
 		if len(msg.Answer) == 0 {
@@ -279,7 +296,7 @@ func (s *Server) answerTXT(msg *dns.Msg, q dns.Question, resolved owner) {
 	}
 	if len(resolved.static.Values) > 0 {
 		for _, value := range resolved.static.Values {
-			s.appendTXT(msg, q.Name, resolved.static.TTL, value)
+			s.appendTXT(msg, q.Header().Name, resolved.static.TTL, value)
 		}
 		return
 	}
@@ -288,13 +305,12 @@ func (s *Server) answerTXT(msg *dns.Msg, q dns.Question, resolved owner) {
 
 // answerMX publishes configured mail routes without inheriting apex MX records
 // at registered hostnames or their wildcard owners.
-func (s *Server) answerMX(msg *dns.Msg, q dns.Question) {
-	rrset := s.config.StaticMX[strings.ToLower(q.Name)]
+func (s *Server) answerMX(msg *dns.Msg, q dns.RR) {
+	rrset := s.config.StaticMX[strings.ToLower(q.Header().Name)]
 	for _, record := range rrset.Records {
 		msg.Answer = append(msg.Answer, &dns.MX{
-			Hdr:        dns.RR_Header{Name: q.Name, Rrtype: dns.TypeMX, Class: dns.ClassINET, Ttl: rrset.TTL},
-			Preference: record.Preference,
-			Mx:         record.Exchange,
+			Hdr: dns.Header{Name: q.Header().Name, Class: dns.ClassINET, TTL: rrset.TTL},
+			MX:  rdata.MX{Preference: record.Preference, Mx: record.Exchange},
 		})
 	}
 	if len(msg.Answer) == 0 {
@@ -302,6 +318,7 @@ func (s *Server) answerMX(msg *dns.Msg, q dns.Question) {
 	}
 }
 
+// negative adds the zone SOA for negative caching and sets NXDOMAIN when nameError is true.
 func (s *Server) negative(msg *dns.Msg, nameError bool) {
 	if nameError {
 		msg.Rcode = dns.RcodeNameError
@@ -311,50 +328,57 @@ func (s *Server) negative(msg *dns.Msg, nameError bool) {
 	}
 }
 
+// appendA appends an IPv4 address record using the registration TTL.
 func (s *Server) appendA(msg *dns.Msg, name string, addr netip.Addr) {
 	msg.Answer = append(msg.Answer, &dns.A{
-		Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: registrationTTL},
-		A:   net.IP(addr.AsSlice()),
+		Hdr: dns.Header{Name: name, Class: dns.ClassINET, TTL: registrationTTL},
+		A:   rdata.A{Addr: addr},
 	})
 }
 
 // appendAAAA appends an IPv6 address record using the registration TTL.
 func (s *Server) appendAAAA(msg *dns.Msg, name string, addr netip.Addr) {
 	msg.Answer = append(msg.Answer, &dns.AAAA{
-		Hdr:  dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: registrationTTL},
-		AAAA: net.IP(addr.AsSlice()),
+		Hdr:  dns.Header{Name: name, Class: dns.ClassINET, TTL: registrationTTL},
+		AAAA: rdata.AAAA{Addr: addr},
 	})
 }
 
+// appendTXT appends one TXT record, splitting its value into DNS character strings.
 func (s *Server) appendTXT(msg *dns.Msg, name string, ttl uint32, value string) {
 	msg.Answer = append(msg.Answer, &dns.TXT{
-		Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: ttl},
-		Txt: splitTXTValue(value),
+		Hdr: dns.Header{Name: name, Class: dns.ClassINET, TTL: ttl},
+		TXT: rdata.TXT{Txt: splitTXTValue(value)},
 	})
 }
 
+// appendNS appends the configured nameservers with a one-hour TTL.
 func (s *Server) appendNS(msg *dns.Msg, name string) {
 	for _, ns := range s.config.NSRecords {
 		msg.Answer = append(msg.Answer, &dns.NS{
-			Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeNS, Class: dns.ClassINET, Ttl: 3600},
-			Ns:  ns,
+			Hdr: dns.Header{Name: name, Class: dns.ClassINET, TTL: 3600},
+			NS:  rdata.NS{Ns: ns},
 		})
 	}
 }
 
+// soaRR creates a zone SOA record with the configured primary server and contact.
 func (s *Server) soaRR(name string) *dns.SOA {
 	return &dns.SOA{
-		Hdr:     dns.RR_Header{Name: name, Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: soaMinTTL},
-		Ns:      s.config.SOAMname,
-		Mbox:    s.config.SOARname,
-		Serial:  1,
-		Refresh: 3600,
-		Retry:   600,
-		Expire:  86400,
-		Minttl:  soaMinTTL,
+		Hdr: dns.Header{Name: name, Class: dns.ClassINET, TTL: soaMinTTL},
+		SOA: rdata.SOA{
+			Ns:      s.config.SOAMname,
+			Mbox:    s.config.SOARname,
+			Serial:  1,
+			Refresh: 3600,
+			Retry:   600,
+			Expire:  86400,
+			Minttl:  soaMinTTL,
+		},
 	}
 }
 
+// splitTXTValue splits a TXT value into character strings of at most 255 bytes.
 func splitTXTValue(value string) []string {
 	const maxLen = 255
 	parts := make([]string, 0, (len(value)+maxLen-1)/maxLen)
@@ -365,6 +389,7 @@ func splitTXTValue(value string) []string {
 	return append(parts, value)
 }
 
+// relativeLabels returns the labels below zone, rejecting the apex and names outside it.
 func relativeLabels(name, zone string) ([]string, bool) {
 	suffix := "." + zone
 	if !strings.HasSuffix(name, suffix) {
@@ -377,6 +402,7 @@ func relativeLabels(name, zone string) ([]string, bool) {
 	return strings.Split(relative, "."), true
 }
 
+// validHostname reports whether hostname is a single lowercase ASCII hostname label.
 func validHostname(hostname string) bool {
 	if len(hostname) < 1 || len(hostname) > 63 || hostname[0] == '-' || hostname[len(hostname)-1] == '-' {
 		return false

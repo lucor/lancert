@@ -4,6 +4,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -18,7 +19,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -173,32 +175,32 @@ func availableDNSAddress(t *testing.T) string {
 func assertARecord(t *testing.T, server, name, want string) {
 	t.Helper()
 	message := new(dns.Msg)
-	message.SetQuestion(name, dns.TypeA)
-	response, _, err := new(dns.Client).Exchange(message, server)
+	dnsutil.SetQuestion(message, name, dns.TypeA)
+	response, _, err := new(dns.Client).Exchange(context.Background(), message, "udp", server)
 	require.NoError(t, err)
 	require.Len(t, response.Answer, 1)
 	record, ok := response.Answer[0].(*dns.A)
 	require.True(t, ok)
-	assert.Equal(t, want, record.A.String())
+	assert.Equal(t, want, record.Addr.String())
 }
 
 func assertAAAARecord(t *testing.T, server, name, want string) {
 	t.Helper()
 	message := new(dns.Msg)
-	message.SetQuestion(name, dns.TypeAAAA)
-	response, _, err := new(dns.Client).Exchange(message, server)
+	dnsutil.SetQuestion(message, name, dns.TypeAAAA)
+	response, _, err := new(dns.Client).Exchange(context.Background(), message, "udp", server)
 	require.NoError(t, err)
 	require.Len(t, response.Answer, 1)
 	record, ok := response.Answer[0].(*dns.AAAA)
 	require.True(t, ok)
-	assert.Equal(t, netip.MustParseAddr(want).String(), record.AAAA.String())
+	assert.Equal(t, netip.MustParseAddr(want).String(), record.Addr.String())
 }
 
 func assertTXTRecord(t *testing.T, server, name, want string) {
 	t.Helper()
 	message := new(dns.Msg)
-	message.SetQuestion(name, dns.TypeTXT)
-	response, _, err := new(dns.Client).Exchange(message, server)
+	dnsutil.SetQuestion(message, name, dns.TypeTXT)
+	response, _, err := new(dns.Client).Exchange(context.Background(), message, "udp", server)
 	require.NoError(t, err)
 	require.NotEmpty(t, response.Answer)
 	values := make([]string, 0, len(response.Answer))
