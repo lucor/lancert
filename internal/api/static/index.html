@@ -43,58 +43,6 @@
     color: var(--cert);
   }
 
-  /* ── NAV ── */
-  .nav {
-    max-width: 1040px;
-    margin: 0 auto;
-    padding: 32px 24px 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .logo {
-    display: flex;
-    align-items: center;
-    text-decoration: none;
-    font-weight: 750;
-    font-size: 20px;
-    letter-spacing: -.03em;
-  }
-
-  .logo:hover { text-decoration: none; }
-  .logo img { display: block; width: 128px; height: auto; }
-
-  .nav-links {
-    display: flex;
-    gap: 24px;
-    align-items: center;
-  }
-
-  .nav-links a {
-    font-size: 14px;
-    color: var(--muted);
-    font-weight: 500;
-  }
-
-  .nav-links a:hover { color: var(--ink); text-decoration: none; }
-
-  .gh-star {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--ink);
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    padding: 5px 12px;
-    transition: border-color 0.15s;
-  }
-
-  .gh-star:hover { border-color: var(--muted); text-decoration: none; color: var(--ink); }
-  .gh-star svg { width: 15px; height: 15px; fill: currentColor; }
-
   /* ── HERO ── */
   .hero {
     max-width: 1040px;
@@ -544,17 +492,6 @@
 
   .support-link:hover { opacity: 0.85; text-decoration: none; }
 
-  .site-footer {
-    max-width: 1040px;
-    margin: 0 auto;
-    padding: 24px 24px 48px;
-    color: var(--muted);
-    font-size: 13px;
-    text-align: center;
-  }
-
-  .site-footer p { margin: 0; }
-
   /* ── RESPONSIVE ── */
   @media (max-width: 640px) {
     .community-support { grid-template-columns: 1fr; gap: 16px; padding: 0 20px 56px; }
@@ -567,10 +504,6 @@
     .features { grid-template-columns: 1fr; }
     .timeline-item { gap: 16px; }
     .timeline-content { padding-bottom: 24px; }
-    .nav { padding: 24px 20px 0; flex-wrap: wrap; gap: 12px; }
-    .nav-links { gap: 16px; flex-wrap: wrap; justify-content: center; }
-    .nav-links a { font-size: 13px; }
-    .gh-star { margin-top: 4px; }
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -586,22 +519,8 @@
   .copy-btn:focus-visible {
     outline-color: #79b8c8;
   }
-</style></head><body>
-<nav class="nav">
-  <a href="/" class="logo" aria-label="lancert home" aria-current="page"><img src="/assets/lancert-logo.svg" alt="lancert"></a>
-  <div class="nav-links">
-    <a href="#why">Why local HTTPS</a>
-    <a href="#how">How it works</a>
-    <a href="#example">Example</a>
-    <a href="#faq">FAQ</a>
-    <a href="/docs">Docs</a>
-    <a href="/status">Status</a>
-    <a class="gh-star" href="https://github.com/lucor/lancert">
-      <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25z"/></svg>
-      Star on GitHub
-    </a>
-  </div>
-</nav>
+</style>{{template "site-style" .}}</head><body>
+{{template "site-nav" .}}
 
 <main>
 <header class="hero">
@@ -826,9 +745,7 @@
 </div>
 </main>
 
-<footer class="site-footer">
-  <p>The <a href="https://github.com/lucor/lancert/blob/main/LICENSE">lancert software is MIT-licensed</a>. The software and DNS service are provided “as is”, without warranty.</p>
-</footer>
+{{template "site-footer" .}}
 
 <script>
 var heroTerminal = document.querySelector('.hero-terminal');

@@ -23,6 +23,12 @@ var indexHTML []byte
 //go:embed static/docs.html
 var docsHTML []byte
 
+//go:embed static/privacy.html
+var privacyHTML []byte
+
+//go:embed static/terms.html
+var termsHTML []byte
+
 //go:embed static/docs-cli.html
 var docsCLIHTML []byte
 
@@ -35,26 +41,33 @@ var docsWebServersHTML []byte
 //go:embed static/status.html
 var statusHTML string
 
+//go:embed static/layout.html
+var layoutHTML string
+
 //go:embed openapi.yaml
 var openapiYAML []byte
 
 //go:embed static/assets
 var assetsFS embed.FS
 
-var indexTemplate = template.Must(template.New("index").Parse(string(indexHTML)))
-var docsTemplate = template.Must(template.New("docs").Parse(string(docsHTML)))
-var docsCLITemplate = template.Must(template.New("docs-cli").Parse(string(docsCLIHTML)))
-var docsAPITemplate = template.Must(template.New("docs-api").Parse(string(docsAPIHTML)))
-var docsWebServersTemplate = template.Must(template.New("docs-web-servers").Parse(string(docsWebServersHTML)))
-var statusTemplate = template.Must(template.New("status").Parse(statusHTML))
+var indexTemplate = pageTemplate("index", string(indexHTML))
+var docsTemplate = pageTemplate("docs", string(docsHTML))
+var privacyTemplate = pageTemplate("privacy", string(privacyHTML))
+var termsTemplate = pageTemplate("terms", string(termsHTML))
+var docsCLITemplate = pageTemplate("docs-cli", string(docsCLIHTML))
+var docsAPITemplate = pageTemplate("docs-api", string(docsAPIHTML))
+var docsWebServersTemplate = pageTemplate("docs-web-servers", string(docsWebServersHTML))
+var statusTemplate = pageTemplate("status", statusHTML)
 var embeddedAssets = mustEmbeddedAssets()
 
 type pageData struct {
 	Analytics bool
+	Page      string
+	Docs      bool
 }
 
 type statusPageData struct {
-	Analytics                bool
+	pageData
 	Status                   string
 	Version                  string
 	Commit                   string
@@ -127,11 +140,18 @@ func serveAssets(w http.ResponseWriter, r *http.Request) {
 	embeddedAssets.ServeHTTP(w, r)
 }
 
+// pageTemplate adds shared navigation, footer, and styles to a page.
+func pageTemplate(name, source string) *template.Template {
+	page := template.Must(template.New(name).Parse(source))
+	return template.Must(page.Parse(layoutHTML))
+}
+
 func serveHTML(page *template.Template) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Add("Vary", "Host")
-		if err := page.Execute(w, pageData{Analytics: analyticsHost(r.Host)}); err != nil {
+		data := pageData{Analytics: analyticsHost(r.Host), Page: r.URL.Path, Docs: r.URL.Path == "/docs" || strings.HasPrefix(r.URL.Path, "/docs/")}
+		if err := page.Execute(w, data); err != nil {
 			slog.Error("render page", "error", err)
 		}
 	}
@@ -153,7 +173,7 @@ func handleOpenAPI(w http.ResponseWriter, _ *http.Request) {
 func (h *Handler) handleStatusPage(w http.ResponseWriter, r *http.Request) {
 	snapshot := h.snapshot()
 	data := statusPageData{
-		Analytics:                analyticsHost(r.Host),
+		pageData:                 pageData{Analytics: analyticsHost(r.Host), Page: "/status"},
 		Status:                   "operational",
 		Version:                  h.build.Version,
 		Commit:                   h.build.CommitHash,

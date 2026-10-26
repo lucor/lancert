@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>lancert — Terms of Service</title>
+  <meta name="description" content="Conditions for using the hosted Lancert DNS service.">
+  <meta name="theme-color" content="#FFFFFF">
+  <link rel="icon" href="/assets/favicon.ico" sizes="48x48">
+  <link rel="icon" href="/assets/favicon.svg" sizes="any" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+  {{if .Analytics}}<script defer src="https://analytics.lucor.dev/script.js" data-website-id="1c9b0509-2f00-493b-bb0a-da02ffb6ff1d"></script>{{end}}
+  <style>
+    :root { --lan:#078DE5; --ink:#1a1a1a; --text:#374151; --muted:#6b7280; --line:#e5e7eb; }
+    *, *::before, *::after { box-sizing:border-box; }
+    body { margin:0; background:#fff; color:var(--text); font:16px/1.7 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; -webkit-font-smoothing:antialiased; }
+    a { color:var(--lan); text-decoration:none; }
+    a:hover { text-decoration:underline; }
+    main { max-width:1040px; margin:auto; padding:64px 24px 72px; }
+    h1, h2 { color:var(--ink); line-height:1.2; letter-spacing:-.03em; }
+    h1 { margin:0 0 12px; font-size:clamp(32px,5vw,44px); }
+    h2 { margin:36px 0 12px; font-size:23px; }
+    p, ul { margin:0 0 16px; }
+    li { margin-bottom:8px; }
+    .subtitle, .updated { color:var(--muted); }
+    .subtitle { font-size:18px; }
+    .updated { font-size:14px; }
+    :focus-visible { outline:2px solid var(--lan); outline-offset:2px; }
+    @media (max-width:640px) { main { padding:40px 20px 48px; } }
+  </style>
+  {{template "site-style" .}}
+</head>
+<body>
+  {{template "site-nav" .}}
+  <main>
+    <h1>Terms of Service</h1>
+    <p class="subtitle">Conditions for using the hosted DNS service at lancert.dev.</p>
+    <p class="updated">Last updated: 26 October 2026</p>
+
+    <h2>What the service provides</h2>
+    <p>Lancert provides public DNS hostnames that resolve to private IPv4 or IPv6 addresses, along with authenticated DNS-01 challenge updates. The hosted service is free to use.</p>
+    <p>Your ACME client requests and renews certificates with your chosen certificate authority. The hosted Lancert service does not request, renew, store, or distribute certificates or private keys. You are responsible for configuring your client, monitoring renewal, and meeting your certificate authority’s requirements.</p>
+
+    <h2>Availability and changes</h2>
+    <p>The service is provided on a best-effort basis, without a service-level agreement or a guarantee of uninterrupted availability. DNS resolution, registration, and challenge updates may be interrupted by maintenance, faults, or abuse prevention measures.</p>
+    <p>Features, limits, and availability may change, and the service may be discontinued. A registration does not guarantee permanent access to a hostname. If your application depends on Lancert, plan for DNS or certificate renewal failures and a way to move to another service.</p>
+
+    <h2>Acceptable use</h2>
+    <p>Use Lancert only for lawful purposes and for systems you own or are authorized to administer.</p>
+    <ul>
+      <li>Do not use the service for phishing, malware, fraud, or other abusive activity.</li>
+      <li>Do not attempt to access another user’s credentials or modify their registrations.</li>
+      <li>Do not bypass rate limits, create excessive registrations, or deliberately disrupt the service.</li>
+    </ul>
+
+    <h2>Credentials and public DNS</h2>
+    <p>Keep your API credentials secure. They authorize DNS challenge updates for your assigned hostname and can be used to prove control of it to a certificate authority. Store the one-time registration response safely: the service cannot recover the plaintext API key. If credentials are lost, create a new registration; if they are exposed, report the affected hostname so it can be disabled.</p>
+    <p>Registered hostnames, their target private IP addresses, and active challenge TXT values are publicly resolvable. Certificates from public certificate authorities may also appear in public Certificate Transparency logs. Do not use these records to store secrets.</p>
+
+    <h2>Abuse reports and disabling registrations</h2>
+    <p>Registrations may be disabled to address abuse, security risks, or violations of these terms. Disabling a registration stops its DNS answers and rejects further challenge updates. This can prevent certificate issuance or renewal; it does not revoke certificates already issued by a certificate authority.</p>
+    <p>Report suspected abuse or exposed credentials to <a href="mailto:abuse@lancert.dev">abuse@lancert.dev</a>. Include the affected hostname and relevant details, but never send API keys or private keys.</p>
+
+    <h2>Privacy and third parties</h2>
+    <p>The <a href="/privacy">Privacy page</a> explains service data, public statistics, and cookie-free website analytics. Your certificate authority, ACME client, and other external services have their own terms and privacy practices.</p>
+
+    <h2>Software license and warranties</h2>
+    <p>The Lancert source code is available under the <a href="https://github.com/lucor/lancert/blob/main/LICENSE">MIT license</a>. These terms describe the hosted service; the software license governs use, modification, and distribution of the code.</p>
+    <p>To the extent permitted by applicable law, the hosted service is provided “as is” and “as available”, without warranties of availability or fitness for a particular purpose. Nothing in these terms excludes or limits liability that cannot lawfully be excluded or limits rights that applicable law does not allow you to waive.</p>
+
+    <h2>Questions and updates</h2>
+    <p>For general questions, use the <a href="https://github.com/lucor/lancert">project’s GitHub repository</a>. Do not post credentials or other sensitive information in public issues. Updates to these terms will be published on this page with a revised date.</p>
+  </main>
+  {{template "site-footer" .}}
+</body>
+</html>

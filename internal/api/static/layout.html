@@ -1,0 +1,78 @@
+{{define "site-style"}}
+<style>
+  .site-header, .site-footer {
+    width:100%; max-width:1040px; margin:0 auto; padding:24px;
+    color:#4b5563; font:14px/1.6 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  }
+  .site-header { padding-top:28px; padding-bottom:0; }
+  .site-header .site-nav, .site-footer .footer-links {
+    display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:16px;
+    padding:0; margin:0; border:0;
+  }
+  .site-brand { display:inline-flex; align-items:center; min-height:44px; flex-shrink:0; }
+  .site-brand img { display:block; width:128px; height:auto; }
+  .site-nav-links { display:flex; align-items:center; flex-wrap:wrap; gap:24px; }
+  .site-header a, .site-footer a { color:#4b5563; text-decoration:none; }
+  .site-nav-links a, .docs-nav a, .footer-links a { display:inline-flex; align-items:center; min-height:44px; }
+  .site-header a:hover, .site-footer a:hover { color:#1a1a1a; text-decoration:underline; text-underline-offset:4px; }
+  .site-nav-links .github-star { gap:7px; padding:0 12px; border:1px solid #e5e7eb; border-radius:6px; color:#1a1a1a; font-size:13px; font-weight:600; white-space:nowrap; }
+  .site-nav-links .github-star:hover { border-color:#9ca3af; text-decoration:none; }
+  .github-star svg { width:15px; height:15px; fill:currentColor; flex-shrink:0; }
+  .site-header .is-active, .site-header [aria-current="page"], .site-footer [aria-current="page"] { color:#1a1a1a; font-weight:600; }
+  .site-header a:focus-visible, .site-footer a:focus-visible { outline:2px solid #078DE5; outline-offset:4px; border-radius:3px; }
+  .site-header .docs-nav {
+    display:flex; justify-content:flex-start; align-items:center; flex-wrap:wrap; gap:4px 24px;
+    padding:12px 0 0; margin:12px 0 0; border:0; border-top:1px solid #e5e7eb;
+  }
+  .docs-nav [aria-current="page"] { text-decoration:underline; text-decoration-color:#078DE5; text-decoration-thickness:2px; text-underline-offset:8px; }
+  .site-footer { padding-top:0; padding-bottom:32px; text-align:left; border:0; font-size:13px; }
+  .footer-row { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px 32px; padding-top:20px; border-top:1px solid #e5e7eb; }
+  .site-footer .footer-credit { margin:0; }
+  .footer-credit a { color:#1a1a1a; font-weight:500; }
+  .site-footer .footer-links { justify-content:flex-start; gap:24px; }
+  @media (max-width:640px) {
+    .site-header, .site-footer { padding-right:20px; padding-left:20px; }
+    .site-header { padding-top:20px; }
+    .site-nav-links { gap:16px; }
+    .site-header .docs-nav { gap:0 20px; }
+    .footer-row { align-items:flex-start; gap:4px; }
+    .site-footer .footer-credit { flex-basis:100%; }
+  }
+</style>
+{{end}}
+
+{{define "site-nav"}}
+<div class="site-header">
+  <nav class="site-nav" aria-label="Main navigation">
+    <a href="/" class="site-brand" aria-label="lancert home"{{if eq .Page "/"}} aria-current="page"{{end}}><img src="/assets/lancert-logo.svg" alt="lancert" width="128"></a>
+    <div class="site-nav-links">
+      <a href="/docs"{{if .Docs}} class="is-active"{{end}}{{if eq .Page "/docs"}} aria-current="page"{{end}}>Docs</a>
+      <a href="/status"{{if eq .Page "/status"}} aria-current="page"{{end}}>Status</a>
+      <a href="https://github.com/lucor/lancert" class="github-star" target="_blank" rel="noopener noreferrer" aria-label="Star lancert on GitHub (opens in a new tab)">
+        <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25z"/></svg>
+        Star on GitHub
+      </a>
+    </div>
+  </nav>
+  {{if .Docs}}
+  <nav class="docs-nav" aria-label="Documentation navigation">
+    <a href="/docs"{{if eq .Page "/docs"}} aria-current="page"{{end}}>Overview</a>
+    <a href="/docs/cli"{{if eq .Page "/docs/cli"}} aria-current="page"{{end}}>CLI</a>
+    <a href="/docs/acme-clients"{{if eq .Page "/docs/acme-clients"}} aria-current="page"{{end}}>ACME clients</a>
+    <a href="/docs/api"{{if eq .Page "/docs/api"}} aria-current="page"{{end}}>API reference</a>
+  </nav>
+  {{end}}
+</div>
+{{end}}
+
+{{define "site-footer"}}
+<footer class="site-footer">
+  <div class="footer-row">
+    <p class="footer-credit">A project by <a href="https://lucor.dev">Luca Corbo</a></p>
+    <nav class="footer-links" aria-label="Footer navigation">
+      <a href="/privacy"{{if eq .Page "/privacy"}} aria-current="page"{{end}}>Privacy</a>
+      <a href="/terms"{{if eq .Page "/terms"}} aria-current="page"{{end}}>Terms</a>
+    </nav>
+  </div>
+</footer>
+{{end}}

@@ -30,59 +30,6 @@
   a { color: var(--lan); text-decoration: none; }
   a:hover { text-decoration: underline; }
 
-  /* ── NAV ── */
-  .nav {
-    max-width: 1040px;
-    margin: 0 auto;
-    padding: 32px 24px 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .logo {
-    display: flex;
-    align-items: center;
-    text-decoration: none;
-    font-weight: 750;
-    font-size: 20px;
-    letter-spacing: -.03em;
-  }
-
-  .logo:hover { text-decoration: none; }
-  .logo img { display: block; width: 128px; height: auto; }
-
-  .nav-links {
-    display: flex;
-    gap: 24px;
-    align-items: center;
-  }
-
-  .nav-links a {
-    font-size: 14px;
-    color: var(--muted);
-    font-weight: 500;
-  }
-
-  .nav-links a.active { color: var(--ink); font-weight: 600; }
-  .nav-links a:hover { color: var(--ink); text-decoration: none; }
-
-  .gh-star {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--ink);
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    padding: 5px 12px;
-    transition: border-color 0.15s;
-  }
-
-  .gh-star:hover { border-color: var(--muted); text-decoration: none; color: var(--ink); }
-  .gh-star svg { width: 15px; height: 15px; fill: currentColor; }
-
   /* ── CONTAINER & HEADER ── */
   .container {
     max-width: 1040px;
@@ -180,23 +127,8 @@
     color: var(--muted);
   }
 
-  /* ── FOOTER ── */
-  .site-footer {
-    max-width: 1040px;
-    margin: 0 auto;
-    padding: 24px 24px 48px;
-    color: var(--muted);
-    font-size: 13px;
-    text-align: center;
-  }
-
-  .site-footer p { margin: 0; }
-
   /* ── RESPONSIVE ── */
   @media (max-width: 640px) {
-    .nav { padding: 24px 20px 0; flex-wrap: wrap; gap: 12px; }
-    .nav-links { gap: 16px; flex-wrap: wrap; justify-content: center; }
-    .nav-links a { font-size: 13px; }
     .container { padding: 40px 20px 48px; }
     .cards { grid-template-columns: 1fr; }
     .page-header h1 { font-size: 32px; }
@@ -206,19 +138,8 @@
     outline: 2px solid var(--lan);
     outline-offset: 2px;
   }
-</style></head><body><nav class="nav">
-  <a href="/" class="logo" aria-label="lancert home"><img src="/assets/lancert-logo.svg" alt="lancert"></a>
-  <div class="nav-links">
-    <a href="/docs" class="active" aria-current="page">Docs</a>
-    <a href="/docs/cli">CLI</a>
-    <a href="/docs/acme-clients">ACME Clients</a>
-    <a href="/docs/api">API Reference</a>
-    <a href="/status">Status</a>
-    <a class="gh-star" href="https://github.com/lucor/lancert">
-      <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25z"/></svg>
-      Star on GitHub
-    </a>
-  </div>
-</nav><main class="container"><header class="page-header"><h1>Documentation</h1><p class="subtitle">Get a trusted certificate for your local app in seconds. Use the Lancert CLI or your preferred ACME client.</p></header><div class="cards"><a class="card" href="/docs/cli"><div class="card-icon api">⌘</div><h2>Lancert CLI</h2><p>Install the CLI on macOS, Linux, or Windows, get a certificate for a private IPv4 or IPv6 ULA address, and manage renewal.</p><div class="tags"><span class="tag">CLI</span><span class="tag">Let’s Encrypt</span><span class="tag">Renewal</span></div></a><a class="card" href="/docs/acme-clients"><div class="card-icon server">⚙</div><h2>Use your own ACME client</h2><p>Use Lancert’s DNS service with Lego, Certbot, acme.sh, or another compatible client. This path needs a few extra setup steps.</p><div class="tags"><span class="tag">Lego</span><span class="tag">Certbot</span><span class="tag">acme.sh</span></div></a></div></main><footer class="site-footer">
-  <p>The <a href="https://github.com/lucor/lancert/blob/main/LICENSE">lancert software is MIT-licensed</a>. The software and DNS service are provided “as is”, without warranty.</p>
-</footer></body></html>
+</style>{{template "site-style" .}}</head><body>
+{{template "site-nav" .}}
+<main class="container"><header class="page-header"><h1>Documentation</h1><p class="subtitle">Get a trusted certificate for your local app in seconds. Use the Lancert CLI or your preferred ACME client.</p></header><div class="cards"><a class="card" href="/docs/cli"><div class="card-icon api">⌘</div><h2>Lancert CLI</h2><p>Install the CLI on macOS, Linux, or Windows, get a certificate for a private IPv4 or IPv6 ULA address, and manage renewal.</p><div class="tags"><span class="tag">CLI</span><span class="tag">Let’s Encrypt</span><span class="tag">Renewal</span></div></a><a class="card" href="/docs/acme-clients"><div class="card-icon server">⚙</div><h2>Use your own ACME client</h2><p>Use Lancert’s DNS service with Lego, Certbot, acme.sh, or another compatible client. This path needs a few extra setup steps.</p><div class="tags"><span class="tag">Lego</span><span class="tag">Certbot</span><span class="tag">acme.sh</span></div></a></div></main>
+{{template "site-footer" .}}
+</body></html>

@@ -71,6 +71,8 @@ func NewWithBuildInfo(store *registration.Store, zone string, snapshot func() me
 	h.mux.HandleFunc("GET /health", h.handleHealth)
 	h.mux.HandleFunc("GET /status", h.handleStatusRoute)
 	h.mux.HandleFunc("GET /docs", serveHTML(docsTemplate))
+	h.mux.HandleFunc("GET /privacy", serveHTML(privacyTemplate))
+	h.mux.HandleFunc("GET /terms", serveHTML(termsTemplate))
 	h.mux.HandleFunc("GET /docs/cli", serveHTML(docsCLITemplate))
 	h.mux.HandleFunc("GET /docs/acme-clients", serveHTML(docsWebServersTemplate))
 	h.mux.HandleFunc("GET /docs/api", serveHTML(docsAPITemplate))

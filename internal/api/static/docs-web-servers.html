@@ -19,13 +19,6 @@
     a:hover { text-decoration:underline; }
     code,pre { font-family:var(--mono); }
     code { padding:2px 6px; border:1px solid var(--line); border-radius:4px; color:var(--cert); background:var(--surface); font-size:.88em; }
-    .nav { max-width:1040px; margin:auto; padding:32px 24px 0; display:flex; align-items:center; justify-content:space-between; }
-    .logo img { display:block; width:128px; }
-    .nav-links { display:flex; align-items:center; gap:24px; }
-    .nav-links a { color:var(--muted); font-size:14px; font-weight:500; }
-    .nav-links a:hover,.nav-links .active { color:var(--ink); text-decoration:none; }
-    .gh-star { padding:5px 12px; border:1px solid var(--line); border-radius:6px; color:var(--ink)!important; font-size:13px!important; font-weight:600!important; }
-    .gh-star svg { width:15px; height:15px; margin-right:6px; vertical-align:-2px; fill:currentColor; }
     .container { max-width:1040px; margin:auto; padding:48px 24px 80px; }
     .breadcrumb { margin-bottom:32px; color:var(--muted); font-size:14px; }
     .page-header { padding-bottom:36px; border-bottom:1px solid var(--line); }
@@ -54,23 +47,13 @@
     .tab-panel[hidden] { display:none; }
     .output { padding:14px 16px; border:1px solid var(--line); border-radius:8px; background:var(--surface); font-size:14px; }
     .output strong { color:var(--ink); }
-    .site-footer { max-width:1040px; margin:auto; padding:28px 24px 36px; border-top:1px solid var(--line); color:var(--muted); font-size:13px; text-align:center; }
-    @media (max-width:700px) { .nav { padding:20px; flex-wrap:wrap; gap:16px; } .nav-links { gap:14px; flex-wrap:wrap; } .container { padding:36px 20px 60px; } .page-header h1 { font-size:32px; } .tab-list { display:grid; grid-template-columns:1fr; } }
+    @media (max-width:700px) { .container { padding:36px 20px 60px; } .page-header h1 { font-size:32px; } .tab-list { display:grid; grid-template-columns:1fr; } }
     :focus-visible { outline:2px solid var(--lan); outline-offset:2px; }
   </style>
+  {{template "site-style" .}}
 </head>
 <body>
-  <nav class="nav">
-    <a href="/" class="logo" aria-label="lancert home"><img src="/assets/lancert-logo.svg" alt="lancert"></a>
-    <div class="nav-links">
-      <a href="/docs">Docs</a>
-      <a href="/docs/cli">CLI</a>
-      <a href="/docs/acme-clients" class="active" aria-current="page">ACME Clients</a>
-      <a href="/docs/api">API Reference</a>
-      <a href="/status">Status</a>
-      <a class="gh-star" href="https://github.com/lucor/lancert"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25z"/></svg>Star on GitHub</a>
-    </div>
-  </nav>
+  {{template "site-nav" .}}
   <main class="container">
     <div class="breadcrumb"><a href="/docs">Documentation</a> / Use your own ACME client</div>
     <header class="page-header">
@@ -226,7 +209,7 @@ lego \
       </section>
     </div>
   </main>
-  <footer class="site-footer"><p>The <a href="https://github.com/lucor/lancert/blob/main/LICENSE">lancert software is MIT-licensed</a>. The software and DNS service are provided “as is”, without warranty.</p></footer>
+  {{template "site-footer" .}}
   <script>
     document.querySelectorAll('[data-tabs]').forEach(function(group) {
       var tabs = Array.from(group.querySelectorAll('[role="tab"]'));

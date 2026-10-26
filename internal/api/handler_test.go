@@ -222,6 +222,8 @@ func TestPublicPages(t *testing.T) {
 		{"/assets/lancert-logo.svg", []string{"<svg"}, nil},
 		{"/", []string{"Local HTTPS for private IP addresses", "lancert </span><span class=\"t-url\">192.168.1.50", "Prefer your own ACME client", "Why use lancert for local HTTPS", "How local HTTPS works", "Example: Caddy", "Let’s Encrypt", "rate limits", "lancert renew", "What do I trust Lancert with?"}, nil},
 		{"/docs", []string{"Documentation", "Lancert CLI", "Use your own ACME client", "CLI", "Let’s Encrypt", "Renewal", "Certbot", "Lego", "acme.sh", "/docs/api"}, nil},
+		{"/privacy", []string{"<h1>Privacy</h1>", `main { max-width:1040px`, "No cookies.", "We use Umami", "User-Agent", "a hash of your API key", "are public DNS records", "15 minutes", "are not deleted automatically", "cdn.jsdelivr.net"}, nil},
+		{"/terms", []string{"<h1>Terms of Service</h1>", `main { max-width:1040px`, "without a service-level agreement", "Acceptable use", "Credentials and public DNS", "does not revoke certificates", "mailto:abuse@lancert.dev", "Nothing in these terms excludes", `aria-current="page">Terms`}, nil},
 		{"/docs/cli", []string{"CLI Quickstart", "Install the CLI", "brew install lucor/tap/lancert", "go install go.lucor.dev/lancert-cli/cmd/lancert@latest", `aria-label="Target address"`, `aria-controls="target-discovery"`, `aria-selected="true">Discover`, "Detected private IP addresses:", "172.17.15.11 (utun4)", "192.168.0.9  (en0)", "Choose the address where your application is reachable, then run:", "lancert &lt;address&gt;", "lancert 192.168.1.50", "lancert fd12:3456:789a:1::25", "Let’s Encrypt", "rate limits", "lancert renew", "Prefer another ACME client"}, nil},
 		{"/docs/acme-clients", []string{"Use your own ACME client", "Register the target IP", "one-time-secret", "Certbot", "Lego", "acme.sh", "Caddy", "Nginx", "Traefik", "Renew the certificate"}, nil},
 		{"/docs/api", []string{"api-reference", `data-url="/openapi.yaml"`, "Lancert v2"}, nil},
@@ -232,6 +234,11 @@ func TestPublicPages(t *testing.T) {
 		t.Run(test.path, func(t *testing.T) {
 			response := perform(api.handler, http.MethodGet, test.path, nil, test.headers)
 			assert.Equal(t, http.StatusOK, response.Code)
+			if strings.HasPrefix(response.Header().Get("Content-Type"), "text/html") {
+				assert.Contains(t, response.Body.String(), `href="/privacy"`)
+				assert.Contains(t, response.Body.String(), `href="/terms"`)
+				assert.Empty(t, response.Header().Values("Set-Cookie"))
+			}
 			for _, expected := range test.contains {
 				assert.Contains(t, response.Body.String(), expected)
 			}
@@ -252,9 +259,68 @@ func TestStatusShowsStatisticsSince(t *testing.T) {
 	assert.Contains(t, response.Body.String(), "Usage statistics since")
 }
 
+func TestSiteNavigationAndFooter(t *testing.T) {
+	api := newTestAPI(t)
+	for _, path := range []string{"/", "/docs", "/docs/cli", "/docs/acme-clients", "/docs/api", "/status", "/privacy", "/terms"} {
+		t.Run(path, func(t *testing.T) {
+			response := perform(api.handler, http.MethodGet, path, nil, map[string]string{"Accept": "text/html"})
+			require.Equal(t, http.StatusOK, response.Code)
+			body := response.Body.String()
+			_, afterNav, found := strings.Cut(body, `<nav class="site-nav" aria-label="Main navigation">`)
+			require.True(t, found, "main navigation is missing")
+			mainNav, _, found := strings.Cut(afterNav, "</nav>")
+			require.True(t, found)
+			assert.Equal(t, 4, strings.Count(mainNav, "<a "), "logo and three primary links")
+			for _, target := range []string{"/", "/docs", "/status", "https://github.com/lucor/lancert"} {
+				assert.Contains(t, mainNav, `href="`+target+`"`)
+			}
+			assert.NotContains(t, mainNav, "/privacy")
+			assert.NotContains(t, mainNav, "/terms")
+			assert.Contains(t, mainNav, `class="github-star"`)
+			assert.Contains(t, mainNav, "Star on GitHub")
+			assert.Contains(t, mainNav, `aria-hidden="true"`)
+			assert.Contains(t, mainNav, `target="_blank" rel="noopener noreferrer"`)
+			assert.Contains(t, mainNav, `aria-label="Star lancert on GitHub (opens in a new tab)"`)
+			assert.Equal(t, 1, strings.Count(body, "Star on GitHub"))
+
+			_, afterFooter, found := strings.Cut(body, `<footer class="site-footer">`)
+			require.True(t, found, "site footer is missing")
+			footer, _, found := strings.Cut(afterFooter, "</footer>")
+			require.True(t, found)
+			assert.Equal(t, 1, strings.Count(body, "<footer"))
+			assert.Contains(t, footer, `A project by <a href="https://lucor.dev">Luca Corbo</a>`)
+			assert.Contains(t, footer, `aria-label="Footer navigation"`)
+			assert.Equal(t, 3, strings.Count(footer, "<a "), "author and two legal links")
+			assert.NotContains(t, footer, "Open source")
+			assert.NotContains(t, footer, `href="https://github.com/lucor/lancert"`)
+			assert.NotContains(t, footer, `href="/status"`)
+			assert.Contains(t, footer, `href="/privacy"`)
+			assert.Contains(t, footer, `href="/terms"`)
+			assert.NotContains(t, footer, "MIT-licensed")
+			assert.NotContains(t, footer, "without warranty")
+
+			docs := path == "/docs" || strings.HasPrefix(path, "/docs/")
+			_, afterDocs, found := strings.Cut(body, `<nav class="docs-nav" aria-label="Documentation navigation">`)
+			require.Equal(t, docs, found)
+			if docs {
+				docsNav, _, found := strings.Cut(afterDocs, "</nav>")
+				require.True(t, found)
+				assert.Equal(t, 4, strings.Count(docsNav, "<a "))
+				assert.Equal(t, 1, strings.Count(docsNav, `aria-current="page"`))
+				assert.Contains(t, docsNav, `href="`+path+`" aria-current="page"`)
+				assert.Contains(t, mainNav, `href="/docs" class="is-active"`)
+			} else if path == "/privacy" || path == "/terms" {
+				assert.Contains(t, footer, `href="`+path+`" aria-current="page"`)
+			} else {
+				assert.Contains(t, mainNav, `aria-current="page"`)
+			}
+		})
+	}
+}
+
 func TestAnalyticsOnlyOnCanonicalHost(t *testing.T) {
 	api := newTestAPI(t)
-	paths := []string{"/", "/docs", "/docs/cli", "/docs/acme-clients", "/docs/api", "/status"}
+	paths := []string{"/", "/privacy", "/terms", "/docs", "/docs/cli", "/docs/acme-clients", "/docs/api", "/status"}
 	hosts := map[string]bool{
 		"lancert.dev":         true,
 		"lancert.dev:443":     true,

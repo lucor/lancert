@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>lancert — Privacy</title>
+  <meta name="description" content="How Lancert handles service data and cookie-free website analytics.">
+  <meta name="theme-color" content="#FFFFFF">
+  <link rel="icon" href="/assets/favicon.ico" sizes="48x48">
+  <link rel="icon" href="/assets/favicon.svg" sizes="any" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+  {{if .Analytics}}<script defer src="https://analytics.lucor.dev/script.js" data-website-id="1c9b0509-2f00-493b-bb0a-da02ffb6ff1d"></script>{{end}}
+  <style>
+    :root { --lan:#078DE5; --ink:#1a1a1a; --text:#374151; --muted:#6b7280; --line:#e5e7eb; }
+    *, *::before, *::after { box-sizing:border-box; }
+    body { margin:0; background:#fff; color:var(--text); font:16px/1.7 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; -webkit-font-smoothing:antialiased; }
+    a { color:var(--lan); text-decoration:none; }
+    a:hover { text-decoration:underline; }
+    main { max-width:1040px; margin:auto; padding:64px 24px 72px; }
+    h1, h2 { color:var(--ink); line-height:1.2; letter-spacing:-.03em; }
+    h1 { margin:0 0 12px; font-size:clamp(32px,5vw,44px); }
+    h2 { margin:36px 0 12px; font-size:23px; }
+    p, ul { margin:0 0 16px; }
+    li { margin-bottom:8px; }
+    .subtitle, .updated { color:var(--muted); }
+    .subtitle { font-size:18px; }
+    .updated { font-size:14px; }
+    :focus-visible { outline:2px solid var(--lan); outline-offset:2px; }
+    @media (max-width:640px) { main { padding:40px 20px 48px; } }
+  </style>
+  {{template "site-style" .}}
+</head>
+<body>
+  {{template "site-nav" .}}
+  <main>
+    <h1>Privacy</h1>
+    <p class="subtitle">No cookies. We use data to run Lancert and understand visits to this website.</p>
+    <p class="updated">Last updated: 26 October 2026</p>
+
+    <h2>Data used by the service</h2>
+    <p>We store your hostname, private IP address, API username, a hash of your API key, and registration dates and status. We also keep dates and counts of DNS challenge updates.</p>
+    <p>We count DNS queries and successful challenge updates for each registration. We also keep response times and the User-Agent strings sent by client software with successful updates.</p>
+    <p>We keep technical logs to help run and protect the service. For DNS challenge update requests, we log a hash of your IP address. We also use this hash to limit the number of requests from the same IP address.</p>
+
+    <h2>Public information</h2>
+    <p>Your hostname, target private IP address, and active DNS challenge values are public DNS records.</p>
+    <p>The <a href="/status">status page</a> shows usage counts by private IP address, network range, and client software.</p>
+    <p>Certificates from public certificate authorities usually appear in public Certificate Transparency logs. We use SSLMate Cert Spotter to read these records and count certificates.</p>
+
+    <h2>Website statistics</h2>
+    <p>We use Umami, hosted at <code>analytics.lucor.dev</code>, to measure visits to <code>lancert.dev</code>, including the documentation and status page. It collects pages visited, where visits come from, browser and operating system details, device type, screen size, language, and approximate location.</p>
+    <p>Umami processes your IP address and browser information to count visits and estimate location. It does not store IP addresses in its analytics records. It does not use cookies. See <a href="https://docs.umami.is/docs/metric-definitions">Umami’s documentation</a> for more details.</p>
+
+    <h2>How long we keep data</h2>
+    <p>Registration data and service statistics are not deleted automatically. Disabling a registration does not delete its data. DNS challenge values stay in memory for up to 15 minutes and are cleared when the service restarts.</p>
+
+    <h2>Other services</h2>
+    <p>The API reference loads Scalar from jsDelivr (<code>cdn.jsdelivr.net</code>). Your browser sends your IP address and request details to jsDelivr when it loads this script.</p>
+  </main>
+  {{template "site-footer" .}}
+</body>
+</html>

@@ -37,16 +37,6 @@
     a:hover { text-decoration: underline; }
     .shell { max-width: 1040px; margin: 0 auto; padding: 0 24px; }
 
-    nav { display: flex; align-items: center; justify-content: space-between; padding: 32px 0 0; }
-    .brand img { display: block; width: 128px; height: auto; }
-    .nav-links { display: flex; align-items: center; gap: 20px; }
-    .nav-links a:not(.gh-star) { color: var(--muted); font-size: 14px; font-weight: 500; }
-    .nav-links a.active { color: var(--ink); font-weight: 650; }
-    .nav-links a:not(.gh-star):hover { color: var(--ink); text-decoration: none; }
-    .gh-star { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); font-size: 13px; font-weight: 600; text-decoration: none; }
-    .gh-star:hover { border-color: var(--muted); color: var(--ink); text-decoration: none; }
-    .gh-star svg { width: 15px; height: 15px; fill: currentColor; }
-
     header { padding: 56px 0 48px; }
     h1, h2, h3, p { margin-top: 0; }
     h1 { max-width: 680px; margin-bottom: 16px; color: var(--ink); font-size: clamp(40px, 7vw, 58px); font-weight: 750; line-height: 1.04; letter-spacing: -.045em; }
@@ -124,16 +114,11 @@
     code { padding: 2px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--cert); font-family: var(--font-mono); font-size: 12px; }
     .empty { margin: 0; padding: 18px; border-radius: 8px; background: var(--surface); color: var(--muted); font-size: 13px; }
 
-    footer { padding: 28px 0 52px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
-    footer p { margin-bottom: 6px; }
-
     @media (max-width: 900px) {
       .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 760px) {
       .shell { padding: 0 20px; }
-      nav { align-items: flex-start; gap: 16px; }
-      .nav-links { flex-wrap: wrap; gap: 12px 16px; }
       header { padding: 56px 0 48px; }
       h1 { font-size: 38px; }
       .section-heading, .cards, .tables, .certificate-panel { grid-template-columns: 1fr; }
@@ -147,20 +132,11 @@
       .table-note { min-height: 0; }
     }
   </style>
+  {{template "site-style" .}}
 </head>
 <body>
+  {{template "site-nav" .}}
   <div class="shell">
-    <nav aria-label="Main navigation">
-      <a class="brand" href="/" aria-label="lancert home"><img src="/assets/lancert-logo.svg" alt="lancert"></a>
-      <div class="nav-links">
-        <a href="/docs">Docs</a>
-        <a href="/status" class="active" aria-current="page">Status</a>
-        <a class="gh-star" href="https://github.com/lucor/lancert">
-          <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25z"/></svg>
-          Star on GitHub
-        </a>
-      </div>
-    </nav>
     <main>
       <header>
         <h1>lancert status</h1>
@@ -173,6 +149,7 @@
         </div>
         <div class="status-summary">
           {{if not .MetricsUpdatedAt.IsZero}}<p class="updated">Metrics updated {{.MetricsUpdatedAt.Format "2 Jan 2006 15:04 UTC"}}</p>{{end}}
+          {{if not .Usage.Since.IsZero}}<p class="updated">Usage statistics since {{.Usage.Since.Format "2 January 2006"}}.</p>{{end}}
         </div>
         {{if or (not .UsageAvailable) (not .MetricsAvailable)}}<p class="notice">Some aggregate usage data is currently unavailable. Registration and authoritative DNS continue to operate independently.</p>{{end}}
       </header>
@@ -299,10 +276,7 @@
       </section>
       {{end}}
     </main>
-    <footer>
-      <p>The <a href="https://github.com/lucor/lancert/blob/main/LICENSE">lancert software is MIT-licensed</a>. The software and DNS service are provided “as is”, without warranty.</p>
-      {{if not .Usage.Since.IsZero}}<p>Usage statistics since {{.Usage.Since.Format "2 January 2006"}}.</p>{{end}}
-    </footer>
   </div>
+  {{template "site-footer" .}}
 </body>
 </html>
