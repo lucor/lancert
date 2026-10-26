@@ -85,8 +85,6 @@ type statusPageData struct {
 	ActivationRate           string
 	NewHostnames7D           uint64
 	NewHostnames30D          uint64
-	RegisteredQueries30D     uint64
-	RegisteredQueriesTotal   uint64
 	Certificates7D           uint64
 	Reissued7D               uint64
 	LEAdoptedHostnames       uint64
@@ -179,8 +177,6 @@ func (h *Handler) handleStatusPage(w http.ResponseWriter, r *http.Request) {
 		Commit:                   h.build.CommitHash,
 		MetricsAvailable:         !snapshot.Unavailable,
 		MetricsUpdatedAt:         snapshot.FreshAt,
-		RegisteredQueries30D:     snapshot.RegisteredQueries30D,
-		RegisteredQueriesTotal:   snapshot.RegisteredQueriesTotal,
 		Certificates7D:           snapshot.Certificates7D,
 		Reissued7D:               snapshot.Reissued7D,
 		LEAdoptedHostnames:       snapshot.LEAdoptedHostnames,

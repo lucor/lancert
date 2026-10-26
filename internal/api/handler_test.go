@@ -259,6 +259,16 @@ func TestStatusShowsStatisticsSince(t *testing.T) {
 	assert.Contains(t, response.Body.String(), "Usage statistics since")
 }
 
+func TestStatusDNSActivityShowsDailyQueries(t *testing.T) {
+	api := newTestAPI(t)
+	response := perform(api.handler, http.MethodGet, "/status", nil, map[string]string{"Accept": "text/html"})
+
+	require.Equal(t, http.StatusOK, response.Code)
+	assert.Contains(t, response.Body.String(), "Daily queries over the last 30 days.")
+	assert.Contains(t, response.Body.String(), `aria-label="Jul 30: 42 DNS queries"`)
+	assert.NotContains(t, response.Body.String(), `class="chart-total"`)
+}
+
 func TestSiteNavigationAndFooter(t *testing.T) {
 	api := newTestAPI(t)
 	for _, path := range []string{"/", "/docs", "/docs/cli", "/docs/acme-clients", "/docs/api", "/status", "/privacy", "/terms"} {

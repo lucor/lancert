@@ -71,7 +71,6 @@
     .chart-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
     .chart-header h3 { margin: 0 0 4px; color: var(--ink); font-size: 15px; }
     .chart-header p { margin: 0; color: var(--muted); font-size: 13px; }
-    .chart-total { flex: 0 0 auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
     .bar-chart { margin-top: 22px; }
     .bar-plot { position: relative; height: 160px; }
     .gridline { position: absolute; right: 0; left: 0; height: 1px; background: var(--line); pointer-events: none; }
@@ -186,7 +185,7 @@
           <p>Authoritative queries whose owners map to existing Lancert hostnames. Unknown-name traffic is excluded.</p>
         </div>
         <div class="chart-panel">
-          <div class="chart-header"><div><h3>DNS queries</h3><p>Daily queries over the last 30 days.</p></div><div class="chart-total">{{.RegisteredQueries30D}} queries</div></div>
+          <div class="chart-header"><div><h3>DNS queries</h3><p>Daily queries over the last 30 days.</p></div></div>
           <div class="bar-chart" role="img" aria-label="Daily DNS queries for existing Lancert hostnames over the last 30 days">
             <div class="bar-plot"><span class="gridline"></span><span class="gridline"></span><span class="gridline"></span><div class="bars">
               {{range .DNSChart}}<div class="bar" style="--bar-height: {{.Height}}%" tabindex="0" aria-label="{{.Label}}: {{.Queries}} DNS queries"><span class="tooltip"><strong>{{.Label}}</strong>{{.Queries}} queries</span></div>{{end}}
