@@ -395,14 +395,17 @@ func TestRecorderTracksDNSAndRegistrationActivity(t *testing.T) {
 	query(t, addr, "unknownunknownunknown2.lancert.dev.", dns.TypeA)
 	query(t, addr, "_acme-challenge."+testHostname+".lancert.dev.", dns.TypeTXT)
 
-	recorder.mu.Lock()
-	defer recorder.mu.Unlock()
-	assert.Equal(t, []string{
-		"01900000-0000-7000-8000-000000000000",
-		"",
-		"01900000-0000-7000-8000-000000000000",
-	}, recorder.registrations)
-	assert.Equal(t, 3, recorder.responses)
+	// Responses can arrive before recording finishes, and queries can be recorded in any order.
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		recorder.mu.Lock()
+		defer recorder.mu.Unlock()
+		assert.ElementsMatch(collect, []string{
+			"01900000-0000-7000-8000-000000000000",
+			"",
+			"01900000-0000-7000-8000-000000000000",
+		}, recorder.registrations)
+		assert.Equal(collect, 3, recorder.responses)
+	}, 5*time.Second, time.Millisecond)
 }
 
 func TestSplitTXTValue(t *testing.T) {
